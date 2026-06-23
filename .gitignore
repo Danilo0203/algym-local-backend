@@ -37,3 +37,6 @@ data.sql
 
 # Datos reales
 uploads/
+
+# Archivos temporales de migración
+.migration-work/
