@@ -31,7 +31,7 @@ $$;
 
 -- El backend podrá asumir estos roles dentro de una transacción.
 GRANT authenticated TO algym_app;
-GRANT service_role TO algym_app;
+REVOKE service_role FROM algym_app;
 
 -- Esquema local que sustituye la parte necesaria de Supabase Auth.
 CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION algym_migrator;
