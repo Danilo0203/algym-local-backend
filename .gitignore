@@ -26,3 +26,14 @@ postgres-data/
 # Sistema operativo
 .DS_Store
 Thumbs.db
+
+# Exportaciones privadas de base de datos
+database/private/
+backups/
+*.backup
+*.dump
+roles.sql
+data.sql
+
+# Datos reales
+uploads/
