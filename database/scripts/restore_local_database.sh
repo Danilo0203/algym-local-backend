@@ -126,7 +126,25 @@ psql \
   -c "SET LOCAL session_replication_role = replica;" \
   -f "$BACKUP_DIR/data.sql"
 
-echo "8/9 Limpiando comandos biométricos duplicados..."
+echo "8/10 Aplicando migraciones posteriores..."
+find "$MIGRATIONS_DIR" \
+  -maxdepth 1 \
+  -type f \
+  -name '*.sql' \
+  ! -name '0001_local_auth_compat.sql' \
+  ! -name '0002_algym_schema.sql' \
+  -print0 |
+sort -z |
+while IFS= read -r -d '' migration; do
+  echo "Ejecutando $(basename "$migration")..."
+
+  psql \
+    -d "$DB_NAME" \
+    -v ON_ERROR_STOP=1 \
+    -f "$migration"
+done
+
+echo "9/10 Limpiando comandos biométricos duplicados..."
 psql \
   -d "$DB_NAME" \
   -v ON_ERROR_STOP=1 \
@@ -137,7 +155,7 @@ psql \
   -v ON_ERROR_STOP=1 \
   -c "VACUUM (FULL, ANALYZE) public.device_commands;"
 
-echo "9/9 Verificando integridad..."
+echo "10/10 Verificando integridad..."
 psql \
   -d "$DB_NAME" \
   -v ON_ERROR_STOP=1 \

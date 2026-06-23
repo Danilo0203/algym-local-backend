@@ -1,3 +1,4 @@
+import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -7,9 +8,12 @@ import type {
   Request,
   Response,
 } from "express";
+import { ZodError } from "zod";
 
 import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
+import { isAppError } from "./errors/app-error.js";
+import { authRouter } from "./modules/auth/auth.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 
 export const app = express();
@@ -17,6 +21,10 @@ export const app = express();
 const allowedOrigins = new Set(env.CORS_ORIGINS);
 
 app.disable("x-powered-by");
+
+if (env.TRUST_PROXY) {
+  app.set("trust proxy", 1);
+}
 
 app.use(
   pinoHttp({
@@ -40,12 +48,15 @@ app.use(
   }),
 );
 
+app.use(cookieParser());
+
 app.use(
   express.json({
     limit: "1mb",
   }),
 );
 
+app.use("/auth", authRouter);
 app.use("/health", healthRouter);
 
 app.use((_request: Request, response: Response) => {
@@ -61,13 +72,44 @@ app.use(
     response: Response,
     _next: NextFunction,
   ) => {
-    request.log.error(
-      { error },
-      "Error no controlado en la solicitud",
-    );
+    if (error instanceof ZodError) {
+      response.status(400).json({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Solicitud inválida",
+          details: error.flatten().fieldErrors,
+        },
+      });
+      return;
+    }
+
+    if (isAppError(error)) {
+      if (error.statusCode >= 500) {
+        request.log.error(
+          { error },
+          "Error controlado del servidor",
+        );
+      }
+
+      response.status(error.statusCode).json({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.details !== undefined
+            ? { details: error.details }
+            : {}),
+        },
+      });
+      return;
+    }
+
+    request.log.error({ error }, "Error no controlado en la solicitud");
 
     response.status(500).json({
-      error: "Error interno del servidor",
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Error interno del servidor",
+      },
     });
   },
 );

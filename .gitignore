@@ -40,3 +40,5 @@ uploads/
 
 # Archivos temporales de migración
 .migration-work/
+.npm-cache/
+.pnpm-store/

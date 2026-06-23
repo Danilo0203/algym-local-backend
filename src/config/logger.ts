@@ -8,4 +8,13 @@ export const logger = pino({
     service: "algym-local-backend",
     environment: env.NODE_ENV,
   },
+  redact: {
+    paths: [
+      "req.headers.cookie",
+      "req.headers.authorization",
+      "res.headers.set-cookie",
+      "res.headers['set-cookie']",
+    ],
+    censor: "[Redacted]",
+  },
 });
