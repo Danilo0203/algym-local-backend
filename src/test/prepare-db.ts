@@ -31,6 +31,38 @@ const migrationDirectory = path.join(
   "database",
   "migrations",
 );
+const syntheticAuthorizationSeedSql = `
+  INSERT INTO public.roles (slug, name, scope, is_system, is_protected)
+  VALUES
+    ('client', 'client', 'client', true, false),
+    ('employee', 'employee', 'panel', true, false),
+    ('owner', 'owner', 'panel', true, false)
+  ON CONFLICT (slug) DO UPDATE
+  SET name = EXCLUDED.name,
+      scope = EXCLUDED.scope;
+
+  INSERT INTO public.permissions (key, description, module, action)
+  VALUES
+    ('customers.view', 'Permiso sintético customers.view', 'customers', 'view'),
+    ('dashboard.view', 'Permiso sintético dashboard.view', 'dashboard', 'view'),
+    ('profile.view', 'Permiso sintético profile.view', 'profile', 'view'),
+    ('roles.view', 'Permiso sintético roles.view', 'roles', 'view'),
+    ('users.view', 'Permiso sintético users.view', 'users', 'view')
+  ON CONFLICT (key) DO UPDATE
+  SET description = EXCLUDED.description,
+      module = EXCLUDED.module,
+      action = EXCLUDED.action;
+
+  INSERT INTO public.role_permissions (role_id, permission_id)
+  SELECT r.id, p.id
+  FROM public.roles AS r
+  JOIN public.permissions AS p
+    ON (
+      (r.slug = 'employee' AND p.key IN ('customers.view', 'dashboard.view', 'profile.view'))
+      OR (r.slug = 'owner' AND p.key IN ('dashboard.view', 'roles.view', 'users.view'))
+    )
+  ON CONFLICT (role_id, permission_id) DO NOTHING;
+`;
 
 const connectionArguments = adminUser
   ? [
@@ -84,3 +116,13 @@ for (const migrationName of [
     path.join(migrationDirectory, migrationName),
   ]);
 }
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-c",
+  syntheticAuthorizationSeedSql,
+]);

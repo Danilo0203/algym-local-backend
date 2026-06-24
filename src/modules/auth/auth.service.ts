@@ -9,8 +9,11 @@ import { pool } from "../../db/pool.js";
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
 import {
+  authorizationScopeSchema,
+  authenticatedUserContextSchema,
   loginBodySchema,
   sessionTokenSchema,
+  type AuthenticatedUserContext,
   type LoginBody,
 } from "./auth.schemas.js";
 
@@ -27,25 +30,17 @@ type SessionRow = {
   secret_hash: Buffer;
   expires_at: Date;
   revoked_at: Date | null;
-  last_used_at: Date;
 };
 
-type AuthProfileRow = {
+type AuthenticatedUserContextRow = {
   id: string;
   email: string | null;
   full_name: string;
-  role: string;
+  profile_role: string;
   is_active: boolean;
-};
-
-export type AuthenticatedUser = {
-  id: string;
-  email: string | null;
-  profile: {
-    fullName: string;
-    role: string;
-    isActive: boolean;
-  };
+  role_slug: string;
+  permissions: string[] | null;
+  is_owner: boolean;
 };
 
 export type SessionContext = {
@@ -69,10 +64,41 @@ const invalidSessionError = new AppError(
   "Sesión inválida",
 );
 
+const inactiveProfileError = new AppError(
+  403,
+  "PROFILE_INACTIVE",
+  "Perfil inactivo",
+);
+
 const fallbackPasswordHash = bcrypt.hashSync(
   "algym-invalid-credentials-placeholder",
   10,
 );
+
+const panelRoleSlugs = new Set([
+  "admin",
+  "employee",
+  "owner",
+  "trainer",
+]);
+
+function resolveAuthorizationScope(
+  roleSlug: string,
+): "panel" | "client" {
+  if (roleSlug === "client") {
+    return authorizationScopeSchema.parse("client");
+  }
+
+  if (panelRoleSlugs.has(roleSlug)) {
+    return authorizationScopeSchema.parse("panel");
+  }
+
+  throw new AppError(
+    500,
+    "UNKNOWN_ROLE_SCOPE",
+    "No se pudo determinar el scope del rol",
+  );
+}
 
 export function getSessionCookieOptions(): CookieOptions {
   return {
@@ -145,18 +171,43 @@ async function findUserByEmail(
   return result.rows[0] ?? null;
 }
 
-async function getProfileForUser(
+function toAuthenticatedUserContext(
+  row: AuthenticatedUserContextRow,
+): AuthenticatedUserContext {
+  return authenticatedUserContextSchema.parse({
+    user: {
+      id: row.id,
+      email: row.email,
+      profile: {
+        fullName: row.full_name,
+        role: row.profile_role,
+        isActive: row.is_active,
+      },
+    },
+    authorization: {
+      roleSlug: row.role_slug,
+      scope: resolveAuthorizationScope(row.role_slug),
+      permissions: row.permissions ?? [],
+      isOwner: row.is_owner,
+    },
+  });
+}
+
+async function queryAuthenticatedUserContext(
   client: PoolClient,
   userId: string,
-): Promise<AuthProfileRow | null> {
-  const result = await client.query<AuthProfileRow>(
+): Promise<AuthenticatedUserContextRow | null> {
+  const result = await client.query<AuthenticatedUserContextRow>(
     `
       SELECT
         u.id,
         u.email,
         p.full_name,
-        p.role::text AS role,
-        p.is_active
+        p.role::text AS profile_role,
+        p.is_active,
+        public.get_current_role_slug() AS role_slug,
+        public.get_current_permissions() AS permissions,
+        public.is_owner() AS is_owner
       FROM auth.users AS u
       INNER JOIN public.profiles AS p
         ON p.id = u.id
@@ -170,26 +221,11 @@ async function getProfileForUser(
   return result.rows[0] ?? null;
 }
 
-function toAuthenticatedUser(
-  row: AuthProfileRow,
-): AuthenticatedUser {
-  return {
-    id: row.id,
-    email: row.email,
-    profile: {
-      fullName: row.full_name,
-      role: row.role,
-      isActive: row.is_active,
-    },
-  };
-}
-
 async function createSession(
   userId: string,
   request: Request,
 ): Promise<{
   token: string;
-  expiresAt: Date;
 }> {
   const secret = randomBytes(32).toString("base64url");
   const secretHash = hashSessionSecret(secret);
@@ -197,7 +233,6 @@ async function createSession(
 
   const result = await pool.query<{
     id: string;
-    expires_at: Date;
   }>(
     `
       INSERT INTO auth.sessions (
@@ -208,7 +243,7 @@ async function createSession(
         ip_address
       )
       VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, expires_at
+      RETURNING id
     `,
     [
       userId,
@@ -231,7 +266,6 @@ async function createSession(
 
   return {
     token: buildSessionToken(session.id, secret),
-    expiresAt: session.expires_at,
   };
 }
 
@@ -247,11 +281,39 @@ async function updateLastUsedAt(sessionId: string): Promise<void> {
   );
 }
 
+async function resolveAuthenticatedUserContext(
+  userId: string,
+  missingContextError: AppError,
+): Promise<AuthenticatedUserContext> {
+  const contextRow = await withUserTransaction(userId, (client) =>
+    queryAuthenticatedUserContext(client, userId),
+  );
+
+  if (!contextRow) {
+    throw missingContextError;
+  }
+
+  if (!contextRow.is_active) {
+    throw inactiveProfileError;
+  }
+
+  return toAuthenticatedUserContext(contextRow);
+}
+
+export async function getAuthenticatedUserContext(
+  userId: string,
+): Promise<AuthenticatedUserContext> {
+  return resolveAuthenticatedUserContext(
+    userId,
+    invalidSessionError,
+  );
+}
+
 export async function authenticateUser(
   input: LoginBody,
   request: Request,
 ): Promise<{
-  user: AuthenticatedUser;
+  context: AuthenticatedUserContext;
   token: string;
 }> {
   const body = loginBodySchema.parse(input);
@@ -273,14 +335,10 @@ export async function authenticateUser(
     throw invalidCredentialsError;
   }
 
-  const profile = await withUserTransaction(user.id, (client) =>
-    getProfileForUser(client, user.id),
+  const context = await resolveAuthenticatedUserContext(
+    user.id,
+    invalidCredentialsError,
   );
-
-  if (!profile) {
-    throw invalidCredentialsError;
-  }
-
   const session = await createSession(user.id, request);
 
   await pool.query(
@@ -293,7 +351,7 @@ export async function authenticateUser(
   );
 
   return {
-    user: toAuthenticatedUser(profile),
+    context,
     token: session.token,
   };
 }
@@ -310,8 +368,7 @@ export async function validateSessionToken(
         user_id,
         secret_hash,
         expires_at,
-        revoked_at,
-        last_used_at
+        revoked_at
       FROM auth.sessions
       WHERE id = $1
       LIMIT 1
@@ -344,20 +401,6 @@ export async function validateSessionToken(
     sessionId: session.id,
     userId: session.user_id,
   };
-}
-
-export async function getCurrentUser(
-  userId: string,
-): Promise<AuthenticatedUser> {
-  const profile = await withUserTransaction(userId, (client) =>
-    getProfileForUser(client, userId),
-  );
-
-  if (!profile) {
-    throw invalidSessionError;
-  }
-
-  return toAuthenticatedUser(profile);
 }
 
 export async function revokeSessionToken(

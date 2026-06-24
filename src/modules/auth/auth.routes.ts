@@ -7,7 +7,7 @@ import { loginBodySchema } from "./auth.schemas.js";
 import {
   authenticateUser,
   clearSessionCookie,
-  getCurrentUser,
+  getAuthenticatedUserContext,
   getSessionCookieOptions,
   readSessionTokenFromRequest,
   revokeSessionToken,
@@ -61,9 +61,7 @@ authRouter.post(
         getSessionCookieOptions(),
       );
 
-      response.status(200).json({
-        user: result.user,
-      });
+      response.status(200).json(result.context);
     } catch (error) {
       next(error);
     }
@@ -90,11 +88,11 @@ authRouter.get("/me", async (request, response, next) => {
   try {
     const token = readSessionTokenFromRequest(request);
     const session = await validateSessionToken(token);
-    const user = await getCurrentUser(session.userId);
+    const context = await getAuthenticatedUserContext(
+      session.userId,
+    );
 
-    response.status(200).json({
-      user,
-    });
+    response.status(200).json(context);
   } catch (error) {
     next(error);
   }
