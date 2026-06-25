@@ -45,6 +45,7 @@ const syntheticAuthorizationSeedSql = `
   VALUES
     ('customers.view', 'Permiso sintético customers.view', 'customers', 'view'),
     ('dashboard.view', 'Permiso sintético dashboard.view', 'dashboard', 'view'),
+    ('profile.update', 'Permiso sintético profile.update', 'profile', 'update'),
     ('profile.view', 'Permiso sintético profile.view', 'profile', 'view'),
     ('roles.view', 'Permiso sintético roles.view', 'roles', 'view'),
     ('users.view', 'Permiso sintético users.view', 'users', 'view')
@@ -58,7 +59,7 @@ const syntheticAuthorizationSeedSql = `
   FROM public.roles AS r
   JOIN public.permissions AS p
     ON (
-      (r.slug = 'employee' AND p.key IN ('customers.view', 'dashboard.view', 'profile.view'))
+      (r.slug = 'employee' AND p.key IN ('customers.view', 'dashboard.view', 'profile.view', 'profile.update'))
       OR (r.slug = 'owner' AND p.key IN ('dashboard.view', 'roles.view', 'users.view'))
     )
   ON CONFLICT (role_id, permission_id) DO NOTHING;

@@ -16,6 +16,7 @@ import { isAppError } from "./errors/app-error.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
+import { profileRouter } from "./modules/profile/profile.routes.js";
 
 export const app = express();
 
@@ -60,6 +61,7 @@ app.use(
 app.use("/auth", authRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/health", healthRouter);
+app.use("/profile", profileRouter);
 
 app.use((_request: Request, response: Response) => {
   response.status(404).json({

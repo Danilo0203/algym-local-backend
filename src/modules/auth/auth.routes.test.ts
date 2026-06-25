@@ -30,6 +30,7 @@ const rolePermissionFixtures = {
   employee: [
     "customers.view",
     "dashboard.view",
+    "profile.update",
     "profile.view",
   ],
   owner: ["roles.view", "users.view", "dashboard.view"],
@@ -218,6 +219,7 @@ test("GET /auth/me devuelve exactamente el mismo contexto que login", async () =
   assert.deepEqual(meResponse.body.authorization.permissions, [
     "customers.view",
     "dashboard.view",
+    "profile.update",
     "profile.view",
   ]);
   assert.equal(meResponse.body.authorization.scope, "panel");
