@@ -11,9 +11,11 @@ import { AppError } from "../../errors/app-error.js";
 import {
   authorizationScopeSchema,
   authenticatedUserContextSchema,
+  changePasswordBodySchema,
   loginBodySchema,
   sessionTokenSchema,
   type AuthenticatedUserContext,
+  type ChangePasswordBody,
   type LoginBody,
 } from "./auth.schemas.js";
 
@@ -22,6 +24,11 @@ type AuthUserRow = {
   email: string | null;
   encrypted_password: string | null;
   deleted_at: string | null;
+};
+
+type AuthUserPasswordRow = {
+  id: string;
+  encrypted_password: string | null;
 };
 
 type SessionRow = {
@@ -62,6 +69,24 @@ const invalidSessionError = new AppError(
   401,
   "INVALID_SESSION",
   "Sesión inválida",
+);
+
+const invalidCurrentPasswordError = new AppError(
+  400,
+  "INVALID_CURRENT_PASSWORD",
+  "La contraseña actual es incorrecta",
+);
+
+const passwordUnchangedError = new AppError(
+  400,
+  "PASSWORD_UNCHANGED",
+  "La nueva contraseña no puede ser igual a la actual",
+);
+
+const userNotFoundError = new AppError(
+  404,
+  "USER_NOT_FOUND",
+  "Usuario no encontrado",
 );
 
 const inactiveProfileError = new AppError(
@@ -455,6 +480,105 @@ export async function revokeSessionToken(
     `,
     [sessionId],
   );
+}
+
+async function getUserPasswordById(
+  client: PoolClient,
+  userId: string,
+): Promise<AuthUserPasswordRow | null> {
+  const result = await client.query<AuthUserPasswordRow>(
+    `
+      SELECT
+        id,
+        encrypted_password
+      FROM auth.users
+      WHERE id = $1
+        AND deleted_at IS NULL
+      LIMIT 1
+    `,
+    [userId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function revokeAllUserSessions(
+  client: PoolClient,
+  userId: string,
+): Promise<void> {
+  await client.query(
+    `
+      UPDATE auth.sessions
+      SET revoked_at = COALESCE(revoked_at, now())
+      WHERE user_id = $1
+    `,
+    [userId],
+  );
+}
+
+export async function changeAuthenticatedUserPassword(
+  userId: string,
+  input: ChangePasswordBody,
+): Promise<{
+  message: string;
+  success: true;
+}> {
+  const body = changePasswordBodySchema.parse(input);
+
+  return withUserTransaction(userId, async (client) => {
+    const user = await getUserPasswordById(client, userId);
+
+    if (!user || user.encrypted_password === null) {
+      throw userNotFoundError;
+    }
+
+    const currentPasswordMatches = await bcrypt.compare(
+      body.currentPassword,
+      user.encrypted_password,
+    );
+
+    if (!currentPasswordMatches) {
+      throw invalidCurrentPasswordError;
+    }
+
+    const passwordUnchanged = await bcrypt.compare(
+      body.newPassword,
+      user.encrypted_password,
+    );
+
+    if (passwordUnchanged) {
+      throw passwordUnchangedError;
+    }
+
+    const newPasswordHash = await bcrypt.hash(body.newPassword, 10);
+
+    const updateResult = await client.query(
+      `
+        UPDATE auth.users
+        SET
+          encrypted_password = $1,
+          updated_at = now()
+        WHERE id = $2
+          AND deleted_at IS NULL
+      `,
+      [newPasswordHash, userId],
+    );
+
+    if (updateResult.rowCount === 0) {
+      throw new AppError(
+        500,
+        "PASSWORD_UPDATE_FAILED",
+        "No se pudo actualizar la contraseña",
+      );
+    }
+
+    await revokeAllUserSessions(client, userId);
+
+    return {
+      success: true as const,
+      message: "Contraseña actualizada correctamente",
+    };
+  });
 }
 
 export function readSessionTokenFromRequest(

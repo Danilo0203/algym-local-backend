@@ -16,8 +16,6 @@ import { app } from "../../app.js";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/pool.js";
 import { withUserTransaction } from "../../db/transaction.js";
-import type { AuthenticatedUserContext } from "./auth.schemas.js";
-
 const testEmailDomain = "@auth.test.local";
 const testPassword = "PasswordDePrueba123";
 const currentDirectory = path.dirname(
@@ -36,9 +34,7 @@ const rolePermissionFixtures = {
   owner: ["roles.view", "users.view", "dashboard.view"],
 } satisfies Record<string, string[]>;
 
-function assertNoSensitiveFields(
-  payload: AuthenticatedUserContext,
-): void {
+function assertNoSensitiveFields(payload: unknown): void {
   const serializedPayload = JSON.stringify(payload);
 
   assert.equal(
@@ -327,4 +323,280 @@ test("POST /auth/logout revoca la sesión y responde 204", async () => {
   const meResponse = await agent.get("/auth/me");
 
   assert.equal(meResponse.status, 401);
+});
+
+test("POST /auth/change-password devuelve 401 sin sesion", async () => {
+  const response = await request(app)
+    .post("/auth/change-password")
+    .send({
+      currentPassword: testPassword,
+      newPassword: "NuevaClave123",
+    });
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(response.body, {
+    error: {
+      code: "INVALID_SESSION",
+      message: "Sesión inválida",
+    },
+  });
+});
+
+test("POST /auth/change-password rechaza body vacio", async () => {
+  const { email } = await createSyntheticUser();
+  const agent = request.agent(app);
+
+  await agent.post("/auth/login").send({
+    email,
+    password: testPassword,
+  });
+
+  const response = await agent
+    .post("/auth/change-password")
+    .send({});
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: {
+      code: "VALIDATION_ERROR",
+      message: "Solicitud inválida",
+      details: {
+        currentPassword: [
+          "Invalid input: expected string, received undefined",
+        ],
+        newPassword: [
+          "Invalid input: expected string, received undefined",
+        ],
+      },
+    },
+  });
+});
+
+test("POST /auth/change-password rechaza propiedad desconocida", async () => {
+  const { email } = await createSyntheticUser();
+  const agent = request.agent(app);
+
+  await agent.post("/auth/login").send({
+    email,
+    password: testPassword,
+  });
+
+  const response = await agent
+    .post("/auth/change-password")
+    .send({
+      currentPassword: testPassword,
+      newPassword: "NuevaClave123",
+      role: "owner",
+    });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: {
+      code: "VALIDATION_ERROR",
+      message: "Solicitud inválida",
+      details: {},
+    },
+  });
+});
+
+test("POST /auth/change-password rechaza contraseña nueva corta", async () => {
+  const { email } = await createSyntheticUser();
+  const agent = request.agent(app);
+
+  await agent.post("/auth/login").send({
+    email,
+    password: testPassword,
+  });
+
+  const response = await agent
+    .post("/auth/change-password")
+    .send({
+      currentPassword: testPassword,
+      newPassword: "corta",
+    });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: {
+      code: "VALIDATION_ERROR",
+      message: "Solicitud inválida",
+      details: {
+        newPassword: [
+          "Too small: expected string to have >=8 characters",
+        ],
+      },
+    },
+  });
+});
+
+test("POST /auth/change-password rechaza contraseña actual incorrecta", async () => {
+  const { email } = await createSyntheticUser();
+  const agent = request.agent(app);
+
+  await agent.post("/auth/login").send({
+    email,
+    password: testPassword,
+  });
+
+  const response = await agent
+    .post("/auth/change-password")
+    .send({
+      currentPassword: "incorrecta",
+      newPassword: "NuevaClave123",
+    });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: {
+      code: "INVALID_CURRENT_PASSWORD",
+      message: "La contraseña actual es incorrecta",
+    },
+  });
+});
+
+test("POST /auth/change-password rechaza contraseña nueva igual a la actual", async () => {
+  const { email } = await createSyntheticUser();
+  const agent = request.agent(app);
+
+  await agent.post("/auth/login").send({
+    email,
+    password: testPassword,
+  });
+
+  const response = await agent
+    .post("/auth/change-password")
+    .send({
+      currentPassword: testPassword,
+      newPassword: testPassword,
+    });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: {
+      code: "PASSWORD_UNCHANGED",
+      message:
+        "La nueva contraseña no puede ser igual a la actual",
+    },
+  });
+});
+
+test("POST /auth/change-password actualiza la contraseña, revoca sesiones y limpia cookie", async () => {
+  const { email, userId } = await createSyntheticUser();
+  const agentA = request.agent(app);
+  const agentB = request.agent(app);
+  const newPassword = "NuevaClave123";
+
+  const loginA = await agentA.post("/auth/login").send({
+    email,
+    password: testPassword,
+  });
+  const loginB = await agentB.post("/auth/login").send({
+    email,
+    password: testPassword,
+  });
+
+  assert.equal(loginA.status, 200);
+  assert.equal(loginB.status, 200);
+
+  const changeResponse = await agentA
+    .post("/auth/change-password")
+    .send({
+      currentPassword: testPassword,
+      newPassword,
+    });
+
+  assert.equal(changeResponse.status, 200);
+  assert.deepEqual(changeResponse.body, {
+    success: true,
+    message: "Contraseña actualizada correctamente",
+  });
+  assert.match(
+    String(changeResponse.headers["set-cookie"]?.[0] ?? ""),
+    /algym_session=/,
+  );
+  assert.match(
+    String(changeResponse.headers["set-cookie"]?.[0] ?? ""),
+    /Expires=Thu, 01 Jan 1970 00:00:00 GMT/,
+  );
+  assertNoSensitiveFields(changeResponse.body);
+
+  const meAfterChange = await agentA.get("/auth/me");
+  const otherSessionAfterChange = await agentB.get("/auth/me");
+
+  assert.equal(meAfterChange.status, 401);
+  assert.equal(otherSessionAfterChange.status, 401);
+
+  const sessionsResult = await pool.query<{
+    revoked_at: Date | null;
+  }>(
+    `
+      SELECT revoked_at
+      FROM auth.sessions
+      WHERE user_id = $1
+    `,
+    [userId],
+  );
+
+  assert.equal(sessionsResult.rows.length >= 2, true);
+  assert.equal(
+    sessionsResult.rows.every((row) => row.revoked_at !== null),
+    true,
+  );
+
+  const oldPasswordLogin = await request(app)
+    .post("/auth/login")
+    .send({
+      email,
+      password: testPassword,
+    });
+
+  const newPasswordLogin = await request(app)
+    .post("/auth/login")
+    .send({
+      email,
+      password: newPassword,
+    });
+
+  assert.equal(oldPasswordLogin.status, 401);
+  assert.equal(newPasswordLogin.status, 200);
+});
+
+test("POST /auth/change-password no modifica la contraseña de otro usuario", async () => {
+  const userA = await createSyntheticUser();
+  const userB = await createSyntheticUser();
+  const agentB = request.agent(app);
+  const newPassword = "ClaveUsuarioB9";
+
+  const loginB = await agentB.post("/auth/login").send({
+    email: userB.email,
+    password: testPassword,
+  });
+
+  assert.equal(loginB.status, 200);
+
+  const changeResponse = await agentB
+    .post("/auth/change-password")
+    .send({
+      currentPassword: testPassword,
+      newPassword,
+    });
+
+  assert.equal(changeResponse.status, 200);
+
+  const loginAOldPassword = await request(app)
+    .post("/auth/login")
+    .send({
+      email: userA.email,
+      password: testPassword,
+    });
+
+  const loginANewPassword = await request(app)
+    .post("/auth/login")
+    .send({
+      email: userA.email,
+      password: newPassword,
+    });
+
+  assert.equal(loginAOldPassword.status, 200);
+  assert.equal(loginANewPassword.status, 401);
 });
