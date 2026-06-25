@@ -14,6 +14,7 @@ import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { isAppError } from "./errors/app-error.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
+import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 
 export const app = express();
@@ -57,6 +58,7 @@ app.use(
 );
 
 app.use("/auth", authRouter);
+app.use("/dashboard", dashboardRouter);
 app.use("/health", healthRouter);
 
 app.use((_request: Request, response: Response) => {
