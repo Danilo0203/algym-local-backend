@@ -43,6 +43,8 @@ const syntheticAuthorizationSeedSql = `
 
   INSERT INTO public.permissions (key, description, module, action)
   VALUES
+    ('customers.create', 'Permiso sintético customers.create', 'customers', 'create'),
+    ('customers.update', 'Permiso sintético customers.update', 'customers', 'update'),
     ('customers.view', 'Permiso sintético customers.view', 'customers', 'view'),
     ('dashboard.view', 'Permiso sintético dashboard.view', 'dashboard', 'view'),
     ('profile.update', 'Permiso sintético profile.update', 'profile', 'update'),
@@ -59,7 +61,7 @@ const syntheticAuthorizationSeedSql = `
   FROM public.roles AS r
   JOIN public.permissions AS p
     ON (
-      (r.slug = 'employee' AND p.key IN ('customers.view', 'dashboard.view', 'profile.view', 'profile.update'))
+      (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.update', 'customers.view', 'dashboard.view', 'profile.view', 'profile.update'))
       OR (r.slug = 'owner' AND p.key IN ('dashboard.view', 'roles.view', 'users.view'))
     )
   ON CONFLICT (role_id, permission_id) DO NOTHING;
@@ -106,6 +108,7 @@ for (const migrationName of [
   "0001_local_auth_compat.sql",
   "0002_algym_schema.sql",
   "0003_local_auth_sessions.sql",
+  "0004_customers_phase_a.sql",
 ]) {
   runCommand("psql", [
     ...connectionArguments,

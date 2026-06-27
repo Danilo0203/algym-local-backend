@@ -369,6 +369,24 @@ function seedDashboardData(fixtures: {
   `);
 }
 
+function getGuatemalaTodayIso(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Guatemala",
+  }).format(new Date());
+}
+
+function diffCalendarDays(
+  fromDateIso: string,
+  toDateIso: string,
+): number {
+  const fromDate = new Date(`${fromDateIso}T00:00:00.000Z`);
+  const toDate = new Date(`${toDateIso}T00:00:00.000Z`);
+
+  return Math.round(
+    (toDate.getTime() - fromDate.getTime()) / 86_400_000,
+  );
+}
+
 function assertOverviewShape(
   payload: DashboardOverviewResponse,
 ): void {
@@ -659,7 +677,8 @@ test("GET /dashboard/overview calcula las ocho secciones con datos sinteticos", 
       date: "2026-05-10T17:00:00.000Z",
     },
   ]);
-  assert.deepEqual(response.body.expiringSubscriptions, [
+  const guatemalaToday = getGuatemalaTodayIso();
+  const expectedExpiringSubscriptions = [
     {
       user_id: expiringClient.userId,
       user_name: "Cliente Vigente",
@@ -667,10 +686,30 @@ test("GET /dashboard/overview calcula las ocho secciones con datos sinteticos", 
       phone: "55510001",
       plan_name: "Plan Premium",
       end_date: "2026-06-27",
-      days_left: 2,
     },
-  ]);
-  assert.deepEqual(response.body.inactiveCustomers, [
+    {
+      user_id: recentClient.userId,
+      user_name: "Cliente Efectivo",
+      avatar_url: null,
+      phone: "55510003",
+      plan_name: "Plan Basico",
+      end_date: "2026-07-01",
+    },
+  ]
+    .map((item) => ({
+      ...item,
+      days_left: diffCalendarDays(guatemalaToday, item.end_date),
+    }))
+    .filter(
+      (item) => item.days_left >= 0 && item.days_left <= 5,
+    )
+    .sort(
+      (left, right) =>
+        left.end_date.localeCompare(right.end_date) ||
+        left.user_id.localeCompare(right.user_id),
+    );
+
+  const expectedInactiveCustomers = [
     {
       user_id: inactiveClient.userId,
       user_name: "Cliente Inactivo",
@@ -678,7 +717,6 @@ test("GET /dashboard/overview calcula las ocho secciones con datos sinteticos", 
       phone: "55510002",
       last_plan: "Plan Basico",
       expired_date: "2026-06-10",
-      days_inactive: 15,
     },
     {
       user_id: transferClient.userId,
@@ -687,9 +725,30 @@ test("GET /dashboard/overview calcula las ocho secciones con datos sinteticos", 
       phone: "55510004",
       last_plan: "Plan Basico",
       expired_date: "2026-05-30",
-      days_inactive: 26,
     },
-  ]);
+  ]
+    .map((item) => ({
+      ...item,
+      days_inactive: diffCalendarDays(
+        item.expired_date,
+        guatemalaToday,
+      ),
+    }))
+    .filter((item) => item.days_inactive > 0)
+    .sort(
+      (left, right) =>
+        right.expired_date.localeCompare(left.expired_date) ||
+        left.user_id.localeCompare(right.user_id),
+    );
+
+  assert.deepEqual(
+    response.body.expiringSubscriptions,
+    expectedExpiringSubscriptions,
+  );
+  assert.deepEqual(
+    response.body.inactiveCustomers,
+    expectedInactiveCustomers,
+  );
   assert.equal(typeof response.body.recentPayments[0].id, "string");
   assertNoSensitiveFields(response.body);
 });
