@@ -5,6 +5,7 @@ import {
   readSessionTokenFromRequest,
   validateSessionToken,
 } from "../auth/auth.service.js";
+import { membershipsRouter } from "../memberships/memberships.routes.js";
 import { customerIdParamSchema } from "./customers.schemas.js";
 import {
   createCustomer,
@@ -15,6 +16,8 @@ import {
 } from "./customers.service.js";
 
 export const customersRouter = Router();
+
+customersRouter.use("/:id/membership", membershipsRouter);
 
 customersRouter.get("/", async (request, response, next) => {
   try {
