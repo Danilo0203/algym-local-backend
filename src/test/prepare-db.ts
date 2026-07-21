@@ -151,6 +151,16 @@ runCommand("psql", [
   targetDatabaseName,
   "-v",
   "ON_ERROR_STOP=1",
+  "-c",
+  syntheticAuthorizationSeedSql,
+]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
   "-f",
   path.join(
     migrationDirectory,
@@ -164,6 +174,9 @@ runCommand("psql", [
   targetDatabaseName,
   "-v",
   "ON_ERROR_STOP=1",
-  "-c",
-  syntheticAuthorizationSeedSql,
+  "-f",
+  path.join(
+    migrationDirectory,
+    "0008_admin_customers_view.sql",
+  ),
 ]);
