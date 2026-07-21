@@ -5,6 +5,7 @@ export type CustomerListQuery = {
   page_size: number;
   search?: string;
   sort: string;
+  is_active?: boolean;
 };
 
 export type CustomerCreateInput = {

@@ -126,6 +126,12 @@ export const customersListQuerySchema = z
     page_size: z.coerce.number().int().positive().max(100).default(20),
     search: z.string().trim().max(100).optional(),
     sort: z.string().trim().default("full_name"),
+    is_active: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((value) =>
+        value === undefined ? undefined : value === "true",
+      ),
   })
   .strict() satisfies z.ZodType<CustomerListQuery>;
 

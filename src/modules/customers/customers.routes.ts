@@ -13,8 +13,16 @@ import {
   updateCustomer,
   updateCustomerStatus,
 } from "./customers.service.js";
+import { membershipsRouter } from "../memberships/memberships.routes.js";
+import { getCustomerHistory } from "../customer-history/customer-history.service.js";
+import { getCustomerRoutineWorkspace } from "../customer-routines/customer-routines.service.js";
+import { customerRoutinesRouter } from "../customer-routines/customer-routines.routes.js";
 
 export const customersRouter = Router();
+
+customersRouter.use("/:id/membership", membershipsRouter);
+customersRouter.use("/:id/routines", customerRoutinesRouter);
+
 
 customersRouter.get("/", async (request, response, next) => {
   try {
@@ -30,6 +38,48 @@ customersRouter.get("/", async (request, response, next) => {
     next(error);
   }
 });
+
+customersRouter.get(
+  "/:id/history",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(
+        request.params.id,
+      );
+      const history = await getCustomerHistory(
+        session.userId,
+        customerId,
+      );
+
+      response.status(200).json(history);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+customersRouter.get(
+  "/:id/routine",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(
+        request.params.id,
+      );
+      const workspace = await getCustomerRoutineWorkspace(
+        session.userId,
+        customerId,
+      );
+
+      response.status(200).json(workspace);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 customersRouter.get(
   "/:id",

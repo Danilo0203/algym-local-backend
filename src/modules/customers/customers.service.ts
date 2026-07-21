@@ -353,6 +353,7 @@ export async function listCustomers(
     const parsedQuery = customersListQuerySchema.parse(query);
     const sortClause = resolveSortClause(parsedQuery.sort);
     const normalizedSearch = parsedQuery.search?.trim() ?? "";
+    const activeFilter = parsedQuery.is_active;
     const limit = parsedQuery.page_size;
     const offset = (parsedQuery.page - 1) * parsedQuery.page_size;
 
@@ -364,13 +365,17 @@ export async function listCustomers(
           ON users.id = overview.id
         WHERE users.deleted_at IS NULL
           AND (
+            $3::boolean IS NULL
+            OR overview.is_active = $3
+          )
+          AND (
             $1 = ''
             OR overview.full_name_search LIKE '%' || lower(public.unaccent($1)) || '%'
             OR overview.phone ILIKE '%' || $2 || '%'
             OR lower(coalesce(users.email, '')) LIKE '%' || lower($2) || '%'
           )
       `,
-      [normalizedSearch, normalizedSearch],
+      [normalizedSearch, normalizedSearch, activeFilter ?? null],
     );
 
     const total = Number.parseInt(
@@ -413,16 +418,20 @@ export async function listCustomers(
           ON users.id = overview.id
         WHERE users.deleted_at IS NULL
           AND (
+            $3::boolean IS NULL
+            OR overview.is_active = $3
+          )
+          AND (
             $1 = ''
             OR overview.full_name_search LIKE '%' || lower(public.unaccent($1)) || '%'
             OR overview.phone ILIKE '%' || $2 || '%'
             OR lower(coalesce(users.email, '')) LIKE '%' || lower($2) || '%'
           )
         ORDER BY ${sortClause}
-        LIMIT $3
-        OFFSET $4
+        LIMIT $4
+        OFFSET $5
       `,
-      [normalizedSearch, normalizedSearch, limit, offset],
+      [normalizedSearch, normalizedSearch, activeFilter ?? null, limit, offset],
     );
 
     const response = {

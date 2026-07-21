@@ -214,9 +214,12 @@ test("GET /auth/me devuelve exactamente el mismo contexto que login", async () =
   assert.deepEqual(meResponse.body, loginResponse.body);
   assert.deepEqual(meResponse.body.authorization.permissions, [
     "customers.create",
+    "customers.manage_membership",
+    "customers.manage_routine",
     "customers.update",
     "customers.view",
     "dashboard.view",
+    "plans.view",
     "profile.update",
     "profile.view",
   ]);
