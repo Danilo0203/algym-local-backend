@@ -24,7 +24,7 @@ const currentDirectory = path.dirname(
 const projectRoot = path.resolve(currentDirectory, "../..");
 
 const rolePermissionFixtures = {
-  admin: ["customers.manage_account"],
+  admin: ["customers.manage_account", "customers.view"],
   client: [] as string[],
   employee: [
     "customers.view",
@@ -207,7 +207,10 @@ test("POST /auth/login devuelve authorization y rechaza datos sensibles", async 
   assert.deepEqual(adminLogin.body.authorization, {
     roleSlug: "admin",
     scope: "panel",
-    permissions: ["customers.manage_account"],
+    permissions: [
+      "customers.manage_account",
+      "customers.view",
+    ],
     isOwner: false,
   });
 

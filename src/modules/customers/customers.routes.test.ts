@@ -1281,6 +1281,78 @@ test("GET /customers/:id devuelve cuenta segura y capacidades por permiso", { co
   assertNoSensitiveFields(response.body);
 });
 
+test("RBAC de Clientes permite lectura y cuenta a admin sin ampliar otros roles", { concurrency: false }, async () => {
+  const customer = await createCustomerDirect({
+    fullName: `${testNamePrefix} ADMIN RBAC`,
+  });
+  const admin = await createSyntheticUser({ role: "admin" });
+  const adminAgent = request.agent(app);
+  const adminLogin = await adminAgent.post("/auth/login").send({
+    email: admin.email,
+    password: testPassword,
+  });
+
+  assert.equal(adminLogin.status, 200);
+  assert.deepEqual(adminLogin.body.authorization.permissions, [
+    "customers.manage_account",
+    "customers.view",
+  ]);
+
+  const adminList = await adminAgent.get("/customers");
+  assert.equal(adminList.status, 200);
+
+  const adminDetail = await adminAgent.get(`/customers/${customer.id}`);
+  assert.equal(adminDetail.status, 200);
+  assert.equal(adminDetail.body.capabilities.manage_account, true);
+
+  const updatedEmail = `admin-rbac-${randomUUID()}${testEmailDomain}`;
+  const adminPatch = await adminAgent
+    .patch(`/customers/${customer.id}/account`)
+    .send({ email: updatedEmail });
+  assert.equal(adminPatch.status, 200);
+  assert.equal(adminPatch.body.account.email, updatedEmail);
+
+  const employee = await createSyntheticUser({ role: "employee" });
+  const employeeAgent = request.agent(app);
+  const employeeLogin = await employeeAgent.post("/auth/login").send({
+    email: employee.email,
+    password: testPassword,
+  });
+  assert.equal(employeeLogin.status, 200);
+  assert.equal(
+    employeeLogin.body.authorization.permissions.includes(
+      "customers.manage_account",
+    ),
+    false,
+  );
+
+  for (const role of ["trainer", "client"] as const) {
+    const user = await createSyntheticUser({ role });
+    const cookie = await loginAndGetCookie(user.email);
+    const list = await request(app)
+      .get("/customers")
+      .set("Cookie", cookie);
+    const detail = await request(app)
+      .get(`/customers/${customer.id}`)
+      .set("Cookie", cookie);
+
+    assert.equal(list.status, 403, role);
+    assert.equal(detail.status, 403, role);
+  }
+
+  const owner = await createSyntheticUser({ role: "owner" });
+  const ownerCookie = await loginAndGetCookie(owner.email);
+  const ownerList = await request(app)
+    .get("/customers")
+    .set("Cookie", ownerCookie);
+  const ownerDetail = await request(app)
+    .get(`/customers/${customer.id}`)
+    .set("Cookie", ownerCookie);
+
+  assert.equal(ownerList.status, 200);
+  assert.equal(ownerDetail.status, 200);
+});
+
 test("PATCH /customers/:id/account cubre 401, 403, 404 y cuerpo vacío", { concurrency: false }, async () => {
   const customer = await createCustomerDirect();
 
@@ -1802,4 +1874,44 @@ test("0007 de cuentas de clientes es idempotente", { concurrency: false }, () =>
       { cwd: projectRoot, stdio: "ignore" },
     );
   }
+});
+
+test("0008 asigna una sola relación admin/customers.view y es idempotente", { concurrency: false }, () => {
+  const migrationPath = path.join(
+    projectRoot,
+    "database/migrations/0008_admin_customers_view.sql",
+  );
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    execFileSync(
+      "psql",
+      ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-f", migrationPath],
+      { cwd: projectRoot, stdio: "ignore" },
+    );
+  }
+
+  const relationCount = execFileSync(
+    "psql",
+    [
+      "-d",
+      "algym_test",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-qAt",
+      "-c",
+      `
+        SELECT count(*)
+        FROM public.role_permissions
+        INNER JOIN public.roles
+          ON roles.id = role_permissions.role_id
+        INNER JOIN public.permissions
+          ON permissions.id = role_permissions.permission_id
+        WHERE roles.slug = 'admin'
+          AND permissions.key = 'customers.view';
+      `,
+    ],
+    { cwd: projectRoot, encoding: "utf8" },
+  ).trim();
+
+  assert.equal(relationCount, "1");
 });
