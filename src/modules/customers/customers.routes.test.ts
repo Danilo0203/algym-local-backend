@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test, {
   after,
@@ -18,7 +19,7 @@ import { pool } from "../../db/pool.js";
 const currentDirectory = path.dirname(
   fileURLToPath(import.meta.url),
 );
-const projectRoot = path.resolve(currentDirectory, "../..");
+const projectRoot = path.resolve(currentDirectory, "../../..");
 const testEmailDomain = "@customers.test.local";
 const testPassword = "PasswordDePrueba123";
 const testNamePrefix = "ZZTEST_CUSTOMERS";
@@ -80,6 +81,24 @@ async function cleanupSyntheticUsers(): Promise<void> {
   );
 
   runAdminSql(`
+    DELETE FROM public.attendance_logs
+    WHERE biometric_id IN (
+      SELECT profiles.biometric_id
+      FROM public.profiles
+      INNER JOIN auth.users ON users.id = profiles.id
+      WHERE users.email LIKE '%${testEmailDomain}'
+    );
+
+    DELETE FROM public.payments
+    WHERE user_id IN (
+      SELECT id FROM auth.users WHERE email LIKE '%${testEmailDomain}'
+    );
+
+    DELETE FROM public.body_assessments
+    WHERE user_id IN (
+      SELECT id FROM auth.users WHERE email LIKE '%${testEmailDomain}'
+    );
+
     DELETE FROM public.subscriptions
     WHERE user_id IN (
       SELECT id
@@ -257,41 +276,45 @@ async function createCustomerDirect(options?: {
       options?.email === undefined
       ? `${randomUUID()}${testEmailDomain}`
       : options.email;
-  const result = await pool.query<{
-    customer_id: string;
-    email: string | null;
-  }>(
-    `
-      WITH actor AS (
-        SELECT set_config('app.current_user_id', $1, true)
-      ),
-      created AS (
+  const owner = await createSyntheticUser({ role: "owner" });
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "SELECT set_config('app.current_user_id', $1, true)",
+      [owner.userId],
+    );
+    const result = await client.query<{
+      customer_id: string;
+    }>(
+      `
         SELECT public.create_customer_core(
-          $2,
+          $1,
           '55520000',
           DATE '1993-06-15',
           'female',
-          $3,
+          $2,
           'Rodilla',
           'Nota'
         ) AS customer_id
-      )
-      SELECT created.customer_id, users.email
-      FROM created
-      INNER JOIN auth.users AS users
-        ON users.id = created.customer_id
-    `,
-    [
-      (await createSyntheticUser({ role: "owner" })).userId,
-      options?.fullName ?? `${testNamePrefix} Cliente Directo`,
+      `,
+      [
+        options?.fullName ?? `${testNamePrefix} Cliente Directo`,
+        email,
+      ],
+    );
+    await client.query("COMMIT");
+    return {
+      id: result.rows[0]!.customer_id,
       email,
-    ],
-  );
-
-  return {
-    id: result.rows[0]!.customer_id,
-    email: result.rows[0]!.email,
-  };
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function buildCustomerPayload(overrides?: Record<string, unknown>) {
@@ -1037,4 +1060,411 @@ test("PATCH /customers/:id/status solo cambia profiles.is_active", { concurrency
     afterStatus[0]?.command_count,
   );
   assertNoSensitiveFields(response.body);
+});
+
+test("GET /customers expone filtros combinados, estados, último ingreso y todos los sort permitidos", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const planId = 700000 + Math.floor(Math.random() * 10000);
+
+  runAdminSql(`
+    INSERT INTO public.plans (id, name, price, duration_days, is_active)
+    VALUES (${planId}, '${testNamePrefix} Plan lectura', 100, 30, true);
+  `);
+
+  const fixtures = [
+    { label: "active", status: "active", end: "CURRENT_DATE + 30", grace: 3, active: true },
+    { label: "expiring", status: "active", end: "CURRENT_DATE + 2", grace: 3, active: true },
+    { label: "grace", status: "active", end: "CURRENT_DATE - 1", grace: 3, active: true },
+    { label: "expired", status: "active", end: "CURRENT_DATE - 10", grace: 3, active: true },
+    { label: "cancelled", status: "cancelled", end: "CURRENT_DATE + 30", grace: 3, active: false },
+  ];
+  const customerIds: Record<string, string> = {};
+
+  for (const fixture of fixtures) {
+    const customer = await createCustomerDirect({
+      fullName: `${testNamePrefix} FILTER ${fixture.label}`,
+    });
+    customerIds[fixture.label] = customer.id;
+    runAdminSql(`
+      UPDATE public.profiles
+      SET is_active = ${fixture.active}
+      WHERE id = '${customer.id}';
+      INSERT INTO public.subscriptions (
+        user_id, plan_id, start_date, end_date, status, grace_days
+      ) VALUES (
+        '${customer.id}', ${planId}, CURRENT_DATE - 10,
+        ${fixture.end}, '${fixture.status}', ${fixture.grace}
+      );
+    `);
+  }
+
+  const noMembership = await createCustomerDirect({
+    fullName: `${testNamePrefix} FILTER none`,
+  });
+  customerIds.none = noMembership.id;
+  const pendingMembership = await createCustomerDirect({
+    fullName: `${testNamePrefix} FILTER pending legacy`,
+  });
+  runAdminSql(`
+    INSERT INTO public.subscriptions (
+      user_id, plan_id, start_date, end_date, status, grace_days
+    ) VALUES (
+      '${pendingMembership.id}', ${planId}, CURRENT_DATE,
+      CURRENT_DATE + 30, 'pending', 3
+    );
+  `);
+  const activeBiometric = await queryAsUser<{ biometric_id: number }>(
+    employee.userId,
+    "SELECT biometric_id FROM public.profiles WHERE id = $1",
+    [customerIds.active],
+  );
+  runAdminSql(`
+    INSERT INTO public.attendance_logs (
+      device_id, biometric_id, punch_time, status1, raw_line
+    ) VALUES (
+      'TEST', ${activeBiometric[0]!.biometric_id},
+      TIMESTAMPTZ '2026-07-20 12:00:00+00', 0,
+      'PIN=${activeBiometric[0]!.biometric_id} EVENT=1'
+    );
+  `);
+
+  for (const status of ["active", "expiring", "grace", "expired", "cancelled", "none"]) {
+    const response = await request(app)
+      .get("/customers")
+      .query({
+        search: `${testNamePrefix} FILTER`,
+        membership_status: status,
+        page_size: 100,
+      })
+      .set("Cookie", cookie);
+    assert.equal(response.status, 200);
+    assert.ok(response.body.data.some((row: { id: string }) => row.id === customerIds[status]!));
+  }
+
+  const pendingResponse = await request(app)
+    .get("/customers")
+    .query({ search: `${testNamePrefix} FILTER pending legacy` })
+    .set("Cookie", cookie);
+  assert.equal(pendingResponse.status, 200);
+  assert.equal(pendingResponse.body.data[0].membership_status, "none");
+  assert.equal(pendingResponse.body.data[0].current_membership.status, "pending");
+
+  const combined = await request(app)
+    .get("/customers")
+    .query({
+      search: `${testNamePrefix} FILTER active`,
+      is_active: "true",
+      plan_id: planId,
+      membership_status: "active",
+    })
+    .set("Cookie", cookie);
+  assert.equal(combined.status, 200);
+  assert.equal(combined.body.meta.total, 1);
+  assert.equal(combined.body.data[0].id, customerIds.active);
+  assert.equal(combined.body.data[0].membership_status, "active");
+  assert.equal(combined.body.data[0].current_membership.plan_id, planId);
+  assert.equal(combined.body.data[0].last_check_in, "2026-07-20T12:00:00.000Z");
+  assert.equal(typeof combined.body.data[0].biometric_id, "number");
+
+  for (const sort of [
+    "full_name", "-full_name", "created_at", "-created_at",
+    "updated_at", "-updated_at", "last_check_in", "-last_check_in",
+    "membership_status", "-membership_status",
+  ]) {
+    const response = await request(app)
+      .get("/customers")
+      .query({ search: `${testNamePrefix} FILTER`, sort, page_size: 2 })
+      .set("Cookie", cookie);
+    assert.equal(response.status, 200, sort);
+    assert.equal(response.body.data.length, 2, sort);
+  }
+});
+
+test("GET /customers/sidebar devuelve lectura compacta con límite", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  await createCustomerDirect({ fullName: `${testNamePrefix} SIDEBAR Uno` });
+  await createCustomerDirect({ fullName: `${testNamePrefix} SIDEBAR Dos` });
+
+  const response = await request(app)
+    .get("/customers/sidebar")
+    .query({ search: `${testNamePrefix} SIDEBAR`, limit: 1 })
+    .set("Cookie", cookie);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.length, 1);
+  assert.deepEqual(
+    Object.keys(response.body.data[0]).sort(),
+    ["avatar_url", "biometric_id", "full_name", "id", "is_active", "membership_status", "plan_name"].sort(),
+  );
+});
+
+test("GET /customers/:id devuelve cuenta segura y capacidades por permiso", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const customer = await createCustomerDirect({
+    fullName: `${testNamePrefix} DETAIL ACCOUNT`,
+  });
+
+  const response = await request(app)
+    .get(`/customers/${customer.id}`)
+    .set("Cookie", cookie);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.account.email, customer.email);
+  assert.equal(response.body.account.has_password, false);
+  assert.equal(response.body.account.login_enabled, false);
+  assert.deepEqual(response.body.capabilities, {
+    update_customer: true,
+    manage_membership: true,
+    view_payments: true,
+  });
+  assert.equal(response.body.training_profile, undefined);
+  assert.equal(response.body.routine, undefined);
+  assertNoSensitiveFields(response.body);
+});
+
+test("GET /customers/:id/history aplica límites, paginación, timezone y omite pagos sin payments.view", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const customer = await createCustomerDirect({
+    fullName: `${testNamePrefix} HISTORY`,
+  });
+  const planId = 710000 + Math.floor(Math.random() * 10000);
+  const biometric = await queryAsUser<{ biometric_id: number }>(
+    employee.userId,
+    "SELECT biometric_id FROM public.profiles WHERE id = $1",
+    [customer.id],
+  );
+
+  runAdminSql(`
+    INSERT INTO public.plans (id, name, price, duration_days, is_active)
+    VALUES (${planId}, '${testNamePrefix} History Plan', 100, 30, true);
+
+    WITH membership AS (
+      INSERT INTO public.subscriptions (
+        user_id, plan_id, start_date, end_date, status, grace_days
+      ) VALUES (
+        '${customer.id}', ${planId}, CURRENT_DATE - 30,
+        CURRENT_DATE + 30, 'active', 3
+      ) RETURNING id
+    )
+    INSERT INTO public.payments (
+      subscription_id, user_id, amount_original, discount_amount,
+      amount_paid, method, payment_date, status
+    )
+    SELECT id, '${customer.id}', 100, 10, 90, 'cash', now(), 'posted'
+    FROM membership;
+
+    INSERT INTO public.subscriptions (
+      user_id, plan_id, start_date, end_date, status, grace_days
+    ) VALUES (
+      '${customer.id}', ${planId}, CURRENT_DATE - 90,
+      CURRENT_DATE - 60, 'cancelled', 3
+    );
+
+    INSERT INTO public.payments (
+      user_id, amount_original, discount_amount, amount_paid,
+      method, payment_date, status
+    ) VALUES
+      ('${customer.id}', 100, 10, 90, 'card', now() - interval '1 day', 'posted'),
+      ('${customer.id}', 100, 0, 100, 'cash', now() - interval '2 days', 'reversed');
+
+    INSERT INTO public.attendance_logs (
+      device_id, biometric_id, punch_time, status1, raw_line
+    )
+    SELECT
+      'TEST', ${biometric[0]!.biometric_id},
+      now() - (g || ' hours')::interval, 0,
+      'PIN=${biometric[0]!.biometric_id} EVENT=1'
+    FROM generate_series(1, 55) AS g;
+
+    INSERT INTO public.attendance_logs (
+      device_id, biometric_id, punch_time, status1, raw_line
+    ) VALUES (
+      'TEST-TZ', ${biometric[0]!.biometric_id},
+      CURRENT_DATE::timestamp AT TIME ZONE 'UTC' + interval '30 minutes',
+      0, 'PIN=${biometric[0]!.biometric_id} EVENT=1'
+    );
+
+    INSERT INTO public.body_assessments (
+      user_id, date, weight_kg, height_cm
+    ) VALUES
+      ('${customer.id}', CURRENT_DATE - 20, 80, 175),
+      ('${customer.id}', CURRENT_DATE - 10, 78, 175),
+      ('${customer.id}', CURRENT_DATE, 76, 175);
+  `);
+
+  const response = await request(app)
+    .get(`/customers/${customer.id}/history`)
+    .query({
+      memberships_page_size: 1,
+      payments_page_size: 1,
+      assessments_page_size: 1,
+    })
+    .set("Cookie", cookie);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.attendance.data.length, 50);
+  assert.equal(response.body.attendance.limit, 50);
+  assert.equal(response.body.attendance.total, 56);
+  assert.equal(response.body.heatmap.timezone, "America/Guatemala");
+  assert.equal(response.body.heatmap.days, 365);
+  const expectedLocalDate = await pool.query<{ local_date: string }>(
+    `SELECT to_char(
+      (CURRENT_DATE::timestamp AT TIME ZONE 'UTC' + interval '30 minutes')
+        AT TIME ZONE 'America/Guatemala',
+      'YYYY-MM-DD'
+    ) AS local_date`,
+  );
+  assert.ok(response.body.heatmap.data.some(
+    (row: { date: string }) => row.date === expectedLocalDate.rows[0]!.local_date,
+  ));
+  assert.equal(response.body.memberships.data.length, 1);
+  assert.equal(response.body.memberships.meta.total, 2);
+  assert.equal(response.body.payments.data.length, 1);
+  assert.equal(response.body.payments.meta.total, 2);
+  assert.equal(response.body.assessments.data.length, 1);
+  assert.equal(response.body.assessments.meta.total, 3);
+  assert.equal(response.body.kpis.total_visits, 56);
+  assert.equal(response.body.kpis.total_spent, 180);
+  assert.equal(response.body.kpis.initial_weight, 80);
+  assert.equal(response.body.kpis.current_weight, 76);
+  assert.equal(response.body.kpis.weight_change, -4);
+  assertNoSensitiveFields(response.body);
+
+  const emptyPage = await request(app)
+    .get(`/customers/${customer.id}/history`)
+    .query({
+      memberships_page: 99,
+      payments_page: 99,
+      assessments_page: 99,
+    })
+    .set("Cookie", cookie);
+  assert.equal(emptyPage.status, 200);
+  assert.equal(emptyPage.body.memberships.data.length, 0);
+  assert.equal(emptyPage.body.memberships.meta.total, 2);
+  assert.equal(emptyPage.body.payments.data.length, 0);
+  assert.equal(emptyPage.body.payments.meta.total, 2);
+  assert.equal(emptyPage.body.assessments.data.length, 0);
+  assert.equal(emptyPage.body.assessments.meta.total, 3);
+
+  runAdminSql(`
+    DELETE FROM public.role_permissions AS role_permissions
+    USING public.roles AS roles, public.permissions AS permissions
+    WHERE role_permissions.role_id = roles.id
+      AND role_permissions.permission_id = permissions.id
+      AND roles.slug = 'employee'
+      AND permissions.key = 'payments.view';
+  `);
+
+  try {
+    const withoutPayments = await request(app)
+      .get(`/customers/${customer.id}/history`)
+      .query({ attendance_limit: 5, heatmap_days: 30 })
+      .set("Cookie", cookie);
+    assert.equal(withoutPayments.status, 200);
+    assert.equal(withoutPayments.body.payments, null);
+    assert.equal(withoutPayments.body.kpis.total_spent, null);
+    assert.equal(withoutPayments.body.attendance.data.length, 5);
+    assert.equal(withoutPayments.body.memberships.meta.total, 2);
+    assert.equal(withoutPayments.body.assessments.meta.total, 3);
+  } finally {
+    runAdminSql(`
+      INSERT INTO public.role_permissions (role_id, permission_id)
+      SELECT roles.id, permissions.id
+      FROM public.roles AS roles
+      CROSS JOIN public.permissions AS permissions
+      WHERE roles.slug = 'employee' AND permissions.key = 'payments.view'
+      ON CONFLICT (role_id, permission_id) DO NOTHING;
+    `);
+  }
+
+  const invalidLimit = await request(app)
+    .get(`/customers/${customer.id}/history`)
+    .query({ attendance_limit: 51, heatmap_days: 366 })
+    .set("Cookie", cookie);
+  assert.equal(invalidLimit.status, 400);
+});
+
+test("Historial conserva membresías legacy sin pago", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const customer = await createCustomerDirect({ fullName: `${testNamePrefix} LEGACY` });
+  const planId = 720000 + Math.floor(Math.random() * 10000);
+  runAdminSql(`
+    INSERT INTO public.plans (id, name, price, duration_days, is_active)
+    VALUES (${planId}, '${testNamePrefix} Legacy Plan', 100, 30, true);
+    INSERT INTO public.subscriptions (
+      user_id, plan_id, start_date, end_date, status, grace_days
+    ) VALUES (
+      '${customer.id}', ${planId}, CURRENT_DATE - 60,
+      CURRENT_DATE - 30, 'expired', 3
+    );
+  `);
+
+  const response = await request(app)
+    .get(`/customers/${customer.id}/history`)
+    .set("Cookie", cookie);
+  assert.equal(response.status, 200);
+  assert.equal(response.body.memberships.meta.total, 1);
+  assert.equal(response.body.payments.meta.total, 0);
+  assert.equal(response.body.kpis.total_spent, 0);
+});
+
+test("Historial cubre 401, 403 y 404", { concurrency: false }, async () => {
+  const unauthorized = await request(app)
+    .get(`/customers/${randomUUID()}/history`);
+  assert.equal(unauthorized.status, 401);
+
+  const clientUser = await createSyntheticUser({ role: "client" });
+  const clientCookie = await loginAndGetCookie(clientUser.email);
+  const forbidden = await request(app)
+    .get(`/customers/${randomUUID()}/history`)
+    .set("Cookie", clientCookie);
+  assert.equal(forbidden.status, 403);
+
+  const employee = await createSyntheticUser({ role: "employee" });
+  const employeeCookie = await loginAndGetCookie(employee.email);
+  const missing = await request(app)
+    .get(`/customers/${randomUUID()}/history`)
+    .set("Cookie", employeeCookie);
+  assert.equal(missing.status, 404);
+});
+
+test("Permisos no recursan RLS y el historial mantiene un presupuesto fijo de consultas", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const permissions = await queryAsUser<{
+    permissions: string[];
+    can_view: boolean;
+  }>(employee.userId, `
+    SELECT
+      public.get_current_permissions() AS permissions,
+      public.has_permission('customers.view') AS can_view
+  `);
+  assert.equal(permissions[0]?.can_view, true);
+  assert.ok(permissions[0]?.permissions.includes("customers.view"));
+
+  const source = readFileSync(
+    path.join(projectRoot, "src/modules/customers/customers-history.service.ts"),
+    "utf8",
+  );
+  assert.equal((source.match(/client\.query</g) ?? []).length, 11);
+  assert.equal(/\.map\([\s\S]{0,500}await client\.query/.test(source), false);
+  assert.equal(/for \([\s\S]{0,500}await client\.query/.test(source), false);
+});
+
+test("0006 es idempotente", { concurrency: false }, () => {
+  const migrationPath = path.join(
+    projectRoot,
+    "database/migrations/0006_customers_read_history.sql",
+  );
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    execFileSync(
+      "psql",
+      ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-f", migrationPath],
+      { cwd: projectRoot, stdio: "ignore" },
+    );
+  }
 });

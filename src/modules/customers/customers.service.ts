@@ -7,6 +7,7 @@ import {
   customerCreateSchema,
   customerDetailSchema,
   customerListItemSchema,
+  customerSidebarQuerySchema,
   customerStatusUpdateSchema,
   customerUpdateSchema,
   customersListQuerySchema,
@@ -16,6 +17,7 @@ import type {
   CustomerCreateInput,
   CustomerDetail,
   CustomerListItem,
+  CustomerSidebarResponse,
   CustomersListResponse,
   CustomerUpdateInput,
 } from "./customers.types.js";
@@ -34,9 +36,19 @@ type CustomerListRow = {
   birth_date: string;
   gender: "male" | "female" | "other";
   is_active: boolean;
+  biometric_id: number;
+  membership_status:
+    | "active"
+    | "expiring"
+    | "grace"
+    | "expired"
+    | "cancelled"
+    | "none";
+  last_check_in: Date | null;
   created_at: Date | null;
   updated_at: Date | null;
   plan_name: string | null;
+  plan_id: string | number | null;
   subscription_status: string | null;
   subscription_start_date: string | null;
   subscription_end_date: string | null;
@@ -48,6 +60,8 @@ type CustomerDetailRow = CustomerListRow & {
   role: string;
   injuries: string | null;
   medical_notes: string | null;
+  has_password: boolean;
+  login_enabled: boolean;
 };
 
 type CountRow = {
@@ -68,6 +82,7 @@ const customersViewPermission = "customers.view";
 const customersCreatePermission = "customers.create";
 const customersUpdatePermission = "customers.update";
 const customersManageMembershipPermission = "customers.manage_membership";
+const paymentsViewPermission = "payments.view";
 
 const customerNotFoundError = new AppError(
   404,
@@ -105,6 +120,13 @@ const forbiddenUpdateError = new AppError(
   "No autorizado para editar clientes",
 );
 
+const effectiveMembershipStatusSql = `
+  CASE
+    WHEN overview.subscription_display_status = 'pending' THEN 'none'
+    ELSE overview.subscription_display_status
+  END
+`;
+
 const customerSortMap = {
   full_name: "overview.full_name",
   "-full_name": "overview.full_name DESC",
@@ -112,6 +134,10 @@ const customerSortMap = {
   "-created_at": "profiles.created_at DESC",
   updated_at: "profiles.updated_at",
   "-updated_at": "profiles.updated_at DESC",
+  last_check_in: "last_attendance.last_check_in",
+  "-last_check_in": "last_attendance.last_check_in DESC NULLS LAST",
+  membership_status: effectiveMembershipStatusSql,
+  "-membership_status": `${effectiveMembershipStatusSql} DESC`,
 } as const;
 
 const customerUpdateColumnMap = {
@@ -198,8 +224,10 @@ function resolveSortClause(sort: string): string {
 }
 
 function normalizeMembership(row: CustomerListRow): {
+  plan_id: number | null;
   plan_name: string | null;
   status: string | null;
+  display_status: CustomerListRow["membership_status"];
   start_date: string | null;
   end_date: string | null;
   grace_days: number | null;
@@ -217,8 +245,10 @@ function normalizeMembership(row: CustomerListRow): {
   }
 
   return {
+    plan_id: row.plan_id === null ? null : Number(row.plan_id),
     plan_name: row.plan_name,
     status: row.subscription_status,
+    display_status: row.membership_status,
     start_date: row.subscription_start_date,
     end_date: row.subscription_end_date,
     grace_days: row.subscription_grace_days,
@@ -235,19 +265,41 @@ function mapCustomerListItem(row: CustomerListRow): CustomerListItem {
     avatar_url: row.avatar_url,
     birth_date: row.birth_date,
     gender: row.gender,
+    biometric_id: row.biometric_id,
     is_active: row.is_active,
+    membership_status: row.membership_status,
+    last_check_in: row.last_check_in?.toISOString() ?? null,
     created_at: row.created_at?.toISOString() ?? null,
     updated_at: row.updated_at?.toISOString() ?? null,
     current_membership: normalizeMembership(row),
   });
 }
 
-function mapCustomerDetail(row: CustomerDetailRow): CustomerDetail {
+function mapCustomerDetail(
+  row: CustomerDetailRow,
+  authorization: CustomerAuthorizationRow,
+): CustomerDetail {
   return customerDetailSchema.parse({
     ...mapCustomerListItem(row),
     role: row.role,
     injuries: row.injuries,
     medical_notes: row.medical_notes,
+    account: {
+      email: row.email,
+      has_password: row.has_password,
+      login_enabled: row.login_enabled,
+    },
+    capabilities: {
+      update_customer: hasPermission(
+        authorization,
+        customersUpdatePermission,
+      ),
+      manage_membership: hasPermission(
+        authorization,
+        customersManageMembershipPermission,
+      ),
+      view_payments: hasPermission(authorization, paymentsViewPermission),
+    },
   });
 }
 
@@ -266,9 +318,13 @@ async function getCustomerDetailRow(
         to_char(overview.birth_date, 'YYYY-MM-DD') AS birth_date,
         overview.gender::text AS gender,
         overview.is_active,
+        profiles.biometric_id,
+        ${effectiveMembershipStatusSql} AS membership_status,
+        last_attendance.last_check_in,
         profiles.created_at,
         profiles.updated_at,
         overview.plan_name,
+        overview.plan_id,
         overview.subscription_status,
         to_char(
           overview.subscription_start_date,
@@ -285,12 +341,31 @@ async function getCustomerDetailRow(
         ) AS subscription_access_until,
         profiles.role::text AS role,
         profiles.injuries,
-        profiles.medical_notes
-        FROM public.customer_overview AS overview
-        INNER JOIN public.profiles AS profiles
-          ON profiles.id = overview.id
+        profiles.medical_notes,
+        users.encrypted_password IS NOT NULL AS has_password,
+        users.email IS NOT NULL
+          AND users.encrypted_password IS NOT NULL
+          AND users.deleted_at IS NULL AS login_enabled
+      FROM public.customer_overview AS overview
+      INNER JOIN public.profiles AS profiles
+        ON profiles.id = overview.id
       INNER JOIN auth.users AS users
         ON users.id = overview.id
+      LEFT JOIN LATERAL (
+        SELECT attendance.punch_time AS last_check_in
+        FROM public.attendance_logs AS attendance
+        WHERE attendance.biometric_id = profiles.biometric_id
+          AND (
+            NOT (
+              lower(coalesce(attendance.raw_line, '')) LIKE '%pin=%'
+              AND lower(coalesce(attendance.raw_line, '')) LIKE '%event=%'
+            )
+            OR attendance.status1 IS NULL
+            OR attendance.status1 = 0
+          )
+        ORDER BY attendance.punch_time DESC, attendance.id DESC
+        LIMIT 1
+      ) AS last_attendance ON true
       WHERE overview.id = $1
         AND users.deleted_at IS NULL
       LIMIT 1
@@ -365,6 +440,9 @@ export async function listCustomers(
         INNER JOIN auth.users AS users
           ON users.id = overview.id
         WHERE users.deleted_at IS NULL
+          AND ($3::boolean IS NULL OR overview.is_active = $3)
+          AND ($4::bigint IS NULL OR overview.plan_id = $4)
+          AND ($5::text IS NULL OR ${effectiveMembershipStatusSql} = $5)
           AND (
             $1 = ''
             OR overview.full_name_search LIKE '%' || lower(public.unaccent($1)) || '%'
@@ -372,7 +450,13 @@ export async function listCustomers(
             OR lower(coalesce(users.email, '')) LIKE '%' || lower($2) || '%'
           )
       `,
-      [normalizedSearch, normalizedSearch],
+      [
+        normalizedSearch,
+        normalizedSearch,
+        parsedQuery.is_active ?? null,
+        parsedQuery.plan_id ?? null,
+        parsedQuery.membership_status ?? null,
+      ],
     );
 
     const total = Number.parseInt(
@@ -391,9 +475,13 @@ export async function listCustomers(
           to_char(overview.birth_date, 'YYYY-MM-DD') AS birth_date,
           overview.gender::text AS gender,
           overview.is_active,
+          profiles.biometric_id,
+          ${effectiveMembershipStatusSql} AS membership_status,
+          last_attendance.last_check_in,
           profiles.created_at,
           profiles.updated_at,
           overview.plan_name,
+          overview.plan_id,
           overview.subscription_status,
           to_char(
             overview.subscription_start_date,
@@ -413,7 +501,25 @@ export async function listCustomers(
           ON profiles.id = overview.id
         INNER JOIN auth.users AS users
           ON users.id = overview.id
+        LEFT JOIN LATERAL (
+          SELECT attendance.punch_time AS last_check_in
+          FROM public.attendance_logs AS attendance
+          WHERE attendance.biometric_id = profiles.biometric_id
+            AND (
+              NOT (
+                lower(coalesce(attendance.raw_line, '')) LIKE '%pin=%'
+                AND lower(coalesce(attendance.raw_line, '')) LIKE '%event=%'
+              )
+              OR attendance.status1 IS NULL
+              OR attendance.status1 = 0
+            )
+          ORDER BY attendance.punch_time DESC, attendance.id DESC
+          LIMIT 1
+        ) AS last_attendance ON true
         WHERE users.deleted_at IS NULL
+          AND ($3::boolean IS NULL OR overview.is_active = $3)
+          AND ($4::bigint IS NULL OR overview.plan_id = $4)
+          AND ($5::text IS NULL OR ${effectiveMembershipStatusSql} = $5)
           AND (
             $1 = ''
             OR overview.full_name_search LIKE '%' || lower(public.unaccent($1)) || '%'
@@ -421,10 +527,18 @@ export async function listCustomers(
             OR lower(coalesce(users.email, '')) LIKE '%' || lower($2) || '%'
           )
         ORDER BY ${sortClause}
-        LIMIT $3
-        OFFSET $4
+        LIMIT $6
+        OFFSET $7
       `,
-      [normalizedSearch, normalizedSearch, limit, offset],
+      [
+        normalizedSearch,
+        normalizedSearch,
+        parsedQuery.is_active ?? null,
+        parsedQuery.plan_id ?? null,
+        parsedQuery.membership_status ?? null,
+        limit,
+        offset,
+      ],
     );
 
     const response = {
@@ -458,7 +572,62 @@ export async function getCustomerById(
       throw customerNotFoundError;
     }
 
-    return mapCustomerDetail(customer);
+    return mapCustomerDetail(customer, authorization);
+  });
+}
+
+export async function listCustomerSidebar(
+  actorUserId: string,
+  query: unknown,
+): Promise<CustomerSidebarResponse> {
+  return withUserTransaction(actorUserId, async (client) => {
+    const authorization = await getAuthorization(client);
+    assertViewAccess(authorization);
+    const parsedQuery = customerSidebarQuerySchema.parse(query);
+    const search = parsedQuery.search?.trim() ?? "";
+
+    const result = await client.query<{
+      id: string;
+      full_name: string;
+      avatar_url: string | null;
+      biometric_id: number;
+      is_active: boolean;
+      membership_status: CustomerListRow["membership_status"];
+      plan_name: string | null;
+    }>(
+      `
+        SELECT
+          overview.id,
+          overview.full_name,
+          overview.avatar_url,
+          profiles.biometric_id,
+          overview.is_active,
+          ${effectiveMembershipStatusSql} AS membership_status,
+          overview.plan_name
+        FROM public.customer_overview AS overview
+        INNER JOIN public.profiles AS profiles
+          ON profiles.id = overview.id
+        INNER JOIN auth.users AS users
+          ON users.id = overview.id
+        WHERE users.deleted_at IS NULL
+          AND (
+            $1 = ''
+            OR overview.full_name_search LIKE '%' || lower(public.unaccent($1)) || '%'
+            OR overview.phone ILIKE '%' || $1 || '%'
+            OR lower(coalesce(users.email, '')) LIKE '%' || lower($1) || '%'
+          )
+        ORDER BY overview.full_name, overview.id
+        LIMIT $2
+      `,
+      [search, parsedQuery.limit],
+    );
+
+    return {
+      data: result.rows.map((row) => ({
+        ...row,
+        biometric_id: Number(row.biometric_id),
+      })),
+    };
   });
 }
 
@@ -535,7 +704,7 @@ export async function createCustomer(
         );
       }
 
-      return mapCustomerDetail(customer);
+      return mapCustomerDetail(customer, authorization);
     } catch (error) {
       translateCustomerError(error);
     }
@@ -593,7 +762,7 @@ export async function updateCustomer(
       throw customerNotFoundError;
     }
 
-    return mapCustomerDetail(customer);
+    return mapCustomerDetail(customer, authorization);
   });
 }
 
@@ -639,6 +808,6 @@ export async function updateCustomerStatus(
       throw customerNotFoundError;
     }
 
-    return mapCustomerDetail(customer);
+    return mapCustomerDetail(customer, authorization);
   });
 }

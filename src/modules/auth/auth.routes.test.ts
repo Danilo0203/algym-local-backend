@@ -218,6 +218,7 @@ test("GET /auth/me devuelve exactamente el mismo contexto que login", async () =
     "customers.update",
     "customers.view",
     "dashboard.view",
+    "payments.view",
     "plans.view",
     "profile.update",
     "profile.view",
