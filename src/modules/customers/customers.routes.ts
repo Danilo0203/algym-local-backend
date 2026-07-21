@@ -14,6 +14,7 @@ import {
   listCustomers,
   listCustomerSidebar,
   updateCustomer,
+  updateCustomerAccount,
   updateCustomerStatus,
 } from "./customers.service.js";
 
@@ -106,6 +107,28 @@ customersRouter.post("/", async (request, response, next) => {
     next(error);
   }
 });
+
+customersRouter.patch(
+  "/:id/account",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(
+        request.params.id,
+      );
+      const customer = await updateCustomerAccount(
+        session.userId,
+        customerId,
+        request.body,
+      );
+
+      response.status(200).json(customer);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 customersRouter.patch(
   "/:id",

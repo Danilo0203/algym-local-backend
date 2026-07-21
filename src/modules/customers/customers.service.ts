@@ -1,9 +1,11 @@
+import bcrypt from "bcryptjs";
 import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
 import { createMembershipForCustomerInTransaction } from "../memberships/memberships.service.js";
 import {
+  customerAccountUpdateSchema,
   customerCreateSchema,
   customerDetailSchema,
   customerListItemSchema,
@@ -14,6 +16,7 @@ import {
   customersListResponseSchema,
 } from "./customers.schemas.js";
 import type {
+  CustomerAccountUpdateInput,
   CustomerCreateInput,
   CustomerDetail,
   CustomerListItem,
@@ -74,6 +77,7 @@ type CreateCustomerRow = {
 
 type QueryableError = {
   code?: string;
+  constraint?: string;
   detail?: string;
   message?: string;
 };
@@ -81,6 +85,7 @@ type QueryableError = {
 const customersViewPermission = "customers.view";
 const customersCreatePermission = "customers.create";
 const customersUpdatePermission = "customers.update";
+const customersManageAccountPermission = "customers.manage_account";
 const customersManageMembershipPermission = "customers.manage_membership";
 const paymentsViewPermission = "payments.view";
 
@@ -118,6 +123,18 @@ const forbiddenUpdateError = new AppError(
   403,
   "FORBIDDEN",
   "No autorizado para editar clientes",
+);
+
+const forbiddenManageAccountError = new AppError(
+  403,
+  "FORBIDDEN",
+  "No autorizado para administrar cuentas de clientes",
+);
+
+const passwordRequiresEmailError = new AppError(
+  400,
+  "PASSWORD_REQUIRES_EMAIL",
+  "La contraseña requiere un email",
 );
 
 const effectiveMembershipStatusSql = `
@@ -211,6 +228,16 @@ function assertUpdateAccess(
   throw forbiddenUpdateError;
 }
 
+function assertManageAccountAccess(
+  authorization: CustomerAuthorizationRow,
+): void {
+  if (hasPermission(authorization, customersManageAccountPermission)) {
+    return;
+  }
+
+  throw forbiddenManageAccountError;
+}
+
 function resolveSortClause(sort: string): string {
   const clause = customerSortMap[
     sort as keyof typeof customerSortMap
@@ -293,6 +320,10 @@ function mapCustomerDetail(
       update_customer: hasPermission(
         authorization,
         customersUpdatePermission,
+      ),
+      manage_account: hasPermission(
+        authorization,
+        customersManageAccountPermission,
       ),
       manage_membership: hasPermission(
         authorization,
@@ -408,6 +439,16 @@ function translateCustomerError(error: unknown): never {
   if (
     queryableError?.message === "EMAIL_ALREADY_EXISTS" ||
     queryableError?.detail === "EMAIL_ALREADY_EXISTS"
+  ) {
+    throw emailAlreadyExistsError;
+  }
+
+  if (
+    queryableError?.code === "23505" &&
+    (
+      queryableError?.constraint === "auth_users_email_lower_unique" ||
+      queryableError?.message?.includes("auth_users_email_lower_unique")
+    )
   ) {
     throw emailAlreadyExistsError;
   }
@@ -641,6 +682,10 @@ export async function createCustomer(
 
     const input = customerCreateSchema.parse(body);
 
+    const passwordHash = input.password === undefined
+      ? null
+      : await bcrypt.hash(input.password, 10);
+
     if (
       input.membership &&
       !hasPermission(authorization, customersManageMembershipPermission)
@@ -686,6 +731,19 @@ export async function createCustomer(
         );
       }
 
+      if (passwordHash !== null) {
+        await client.query(
+          `
+            UPDATE auth.users
+            SET
+              encrypted_password = $1,
+              updated_at = now()
+            WHERE id = $2
+          `,
+          [passwordHash, customerId],
+        );
+      }
+
       if (input.membership) {
         await createMembershipForCustomerInTransaction(
           client,
@@ -708,6 +766,95 @@ export async function createCustomer(
     } catch (error) {
       translateCustomerError(error);
     }
+  });
+}
+
+export async function updateCustomerAccount(
+  actorUserId: string,
+  customerId: string,
+  body: unknown,
+): Promise<CustomerDetail> {
+  return withUserTransaction(actorUserId, async (client) => {
+    const authorization = await getAuthorization(client);
+    assertManageAccountAccess(authorization);
+
+    const input: CustomerAccountUpdateInput =
+      customerAccountUpdateSchema.parse(body);
+    const existingCustomer = await getCustomerDetailRow(
+      client,
+      customerId,
+    );
+
+    if (!existingCustomer) {
+      throw customerNotFoundError;
+    }
+
+    const nextEmail = input.email ?? existingCustomer.email;
+
+    if (input.new_password !== undefined && nextEmail === null) {
+      throw passwordRequiresEmailError;
+    }
+
+    const emailChanged = input.email !== undefined &&
+      input.email !== existingCustomer.email;
+    const passwordChanged = input.new_password !== undefined;
+
+    if (emailChanged || passwordChanged) {
+      const passwordHash = input.new_password === undefined
+        ? null
+        : await bcrypt.hash(input.new_password, 10);
+
+      try {
+        const updateResult = await client.query(
+          `
+            UPDATE auth.users
+            SET
+              email = CASE WHEN $1::boolean THEN $2 ELSE email END,
+              email_confirmed_at = CASE
+                WHEN $1::boolean THEN now()
+                ELSE email_confirmed_at
+              END,
+              encrypted_password = CASE
+                WHEN $3::boolean THEN $4
+                ELSE encrypted_password
+              END,
+              updated_at = now()
+            WHERE id = $5
+              AND deleted_at IS NULL
+          `,
+          [
+            emailChanged,
+            input.email ?? null,
+            passwordChanged,
+            passwordHash,
+            customerId,
+          ],
+        );
+
+        if (updateResult.rowCount === 0) {
+          throw customerNotFoundError;
+        }
+
+        await client.query(
+          `
+            UPDATE auth.sessions
+            SET revoked_at = COALESCE(revoked_at, now())
+            WHERE user_id = $1
+          `,
+          [customerId],
+        );
+      } catch (error) {
+        translateCustomerError(error);
+      }
+    }
+
+    const customer = await getCustomerDetailRow(client, customerId);
+
+    if (!customer) {
+      throw customerNotFoundError;
+    }
+
+    return mapCustomerDetail(customer, authorization);
   });
 }
 

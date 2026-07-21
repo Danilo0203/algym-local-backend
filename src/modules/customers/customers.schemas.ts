@@ -1,8 +1,10 @@
 import { z } from "zod";
 
+import { localPasswordSchema } from "../auth/auth.schemas.js";
 import { createMembershipSchema } from "../memberships/memberships.schemas.js";
 
 import type {
+  CustomerAccountUpdateInput,
   CustomerCreateInput,
   CustomerDetail,
   CustomerGender,
@@ -98,6 +100,7 @@ export const customerDetailSchema = customerListItemSchema.extend({
   }),
   capabilities: z.object({
     update_customer: z.boolean(),
+    manage_account: z.boolean(),
     manage_membership: z.boolean(),
     view_payments: z.boolean(),
   }),
@@ -153,10 +156,25 @@ export const customerCreateSchema = z.object({
     (value) => value === undefined || value === "" || z.email().safeParse(value).success,
     "Email inválido",
   ),
+  password: localPasswordSchema.optional(),
   injuries: nullableTrimmedTextSchema,
   medical_notes: nullableTrimmedTextSchema,
   membership: createMembershipSchema.optional(),
-}).strict() satisfies z.ZodType<CustomerCreateInput>;
+}).strict().refine(
+  (value) => value.password === undefined || Boolean(value.email?.trim()),
+  {
+    message: "La contraseña requiere un email",
+    path: ["password"],
+  },
+) satisfies z.ZodType<CustomerCreateInput>;
+
+export const customerAccountUpdateSchema = z.object({
+  email: z.string().trim().toLowerCase().max(320).email().optional(),
+  new_password: localPasswordSchema.optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, {
+  message: "Debes enviar al menos un campo para actualizar",
+  path: ["body"],
+}) satisfies z.ZodType<CustomerAccountUpdateInput>;
 
 export const customerUpdateSchema = z.object({
   full_name: z.string().trim().min(2).optional(),

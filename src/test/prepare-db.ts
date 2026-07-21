@@ -50,6 +50,7 @@ const syntheticAuthorizationSeedSql = `
   INSERT INTO public.permissions (key, description, module, action)
   VALUES
     ('customers.create', 'Permiso sintético customers.create', 'customers', 'create'),
+    ('customers.manage_account', 'Permiso sintético customers.manage_account', 'customers', 'manage_account'),
     ('customers.manage_membership', 'Permiso sintético customers.manage_membership', 'customers', 'manage_membership'),
     ('customers.update', 'Permiso sintético customers.update', 'customers', 'update'),
     ('customers.view', 'Permiso sintético customers.view', 'customers', 'view'),
@@ -70,7 +71,7 @@ const syntheticAuthorizationSeedSql = `
   FROM public.roles AS r
   JOIN public.permissions AS p
     ON (
-      (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.manage_membership', 'customers.update', 'customers.view', 'dashboard.view', 'payments.view', 'plans.view', 'profile.view', 'profile.update'))
+      (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.manage_account', 'customers.manage_membership', 'customers.update', 'customers.view', 'dashboard.view', 'payments.view', 'plans.view', 'profile.view', 'profile.update'))
       OR (r.slug = 'owner' AND p.key IN ('dashboard.view', 'roles.view', 'users.view'))
     )
   ON CONFLICT (role_id, permission_id) DO NOTHING;
@@ -120,6 +121,7 @@ for (const migrationName of [
   "0004_customers_phase_a.sql",
   "0005_memberships_phase_b.sql",
   "0006_customers_read_history.sql",
+  "0007_customers_account_local.sql",
 ]) {
   runCommand("psql", [
     ...connectionArguments,
