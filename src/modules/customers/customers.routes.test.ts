@@ -153,6 +153,9 @@ function assertNoSensitiveFields(payload: unknown): void {
     false,
   );
   assert.equal(serializedPayload.includes("secret_hash"), false);
+  assert.equal(serializedPayload.includes('"sessions"'), false);
+  assert.equal(serializedPayload.includes('"password":'), false);
+  assert.equal(/\$2[aby]\$\d{2}\$/.test(serializedPayload), false);
   assert.equal(serializedPayload.includes("token"), false);
   assert.equal(serializedPayload.includes("cookie"), false);
 }
@@ -216,10 +219,11 @@ async function createSyntheticUser(options?: {
 
 async function loginAndGetCookie(
   email: string,
+  password = testPassword,
 ): Promise<string> {
   const response = await request(app).post("/auth/login").send({
     email,
-    password: testPassword,
+    password,
   });
 
   assert.equal(response.status, 200);
@@ -546,6 +550,52 @@ test("POST /customers crea cliente sin email y sin hash usable", { concurrency: 
   assertNoSensitiveFields(response.body);
 });
 
+test("POST /customers acepta password opcional y permite login sin serializar el hash", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const email = `credential-${randomUUID()}${testEmailDomain}`;
+  const password = "PrimeraClaveSegura123";
+
+  const response = await request(app)
+    .post("/customers")
+    .set("Cookie", cookie)
+    .send(buildCustomerPayload({ email, password }));
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.account.email, email);
+  assert.equal(response.body.account.has_password, true);
+  assert.equal(response.body.account.login_enabled, true);
+  assertNoSensitiveFields(response.body);
+
+  const loginResponse = await request(app).post("/auth/login").send({
+    email: email.toUpperCase(),
+    password,
+  });
+  assert.equal(loginResponse.status, 200);
+  assertNoSensitiveFields(response.body);
+});
+
+test("POST /customers rechaza password débil y password sin email", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+
+  const weak = await request(app)
+    .post("/customers")
+    .set("Cookie", cookie)
+    .send(buildCustomerPayload({ password: "corta" }));
+  assert.equal(weak.status, 400);
+  assert.equal(weak.body.error.code, "VALIDATION_ERROR");
+  assert.ok(weak.body.error.details.password);
+
+  const withoutEmail = await request(app)
+    .post("/customers")
+    .set("Cookie", cookie)
+    .send(buildCustomerPayload({ email: undefined, password: testPassword }));
+  assert.equal(withoutEmail.status, 400);
+  assert.equal(withoutEmail.body.error.code, "VALIDATION_ERROR");
+  assert.ok(withoutEmail.body.error.details.password);
+});
+
 test("Cliente creado sin hash usable no puede iniciar sesion", { concurrency: false }, async () => {
   const employee = await createSyntheticUser({
     role: "employee",
@@ -624,6 +674,7 @@ test("POST /customers crea núcleo y membresía en una sola transacción", { con
     .post("/customers")
     .set("Cookie", cookie)
     .send(buildCustomerPayload({
+      password: testPassword,
       membership: {
         plan_id: planId,
         cycles: 2,
@@ -637,6 +688,8 @@ test("POST /customers crea núcleo y membresía en una sola transacción", { con
   assert.equal(response.body.current_membership.start_date, "2026-07-21");
   assert.equal(response.body.current_membership.end_date, "2026-09-19");
   assert.equal(response.body.current_membership.grace_days, 3);
+  assert.equal(response.body.account.has_password, true);
+  assertNoSensitiveFields(response.body);
 });
 
 test("POST /customers con membresía exige customers.manage_membership y revierte el núcleo", { concurrency: false }, async () => {
@@ -696,6 +749,7 @@ test("POST /customers revierte el núcleo cuando falla la membresía", { concurr
     .set("Cookie", cookie)
     .send(buildCustomerPayload({
       email,
+      password: testPassword,
       membership: {
         plan_id: 2147483647,
         cycles: 1,
@@ -1217,12 +1271,287 @@ test("GET /customers/:id devuelve cuenta segura y capacidades por permiso", { co
   assert.equal(response.body.account.login_enabled, false);
   assert.deepEqual(response.body.capabilities, {
     update_customer: true,
+    manage_account: true,
     manage_membership: true,
     view_payments: true,
   });
   assert.equal(response.body.training_profile, undefined);
   assert.equal(response.body.routine, undefined);
   assertNoSensitiveFields(response.body);
+});
+
+test("PATCH /customers/:id/account cubre 401, 403, 404 y cuerpo vacío", { concurrency: false }, async () => {
+  const customer = await createCustomerDirect();
+
+  const unauthorized = await request(app)
+    .patch(`/customers/${customer.id}/account`)
+    .send({ email: `unauthorized-${randomUUID()}${testEmailDomain}` });
+  assert.equal(unauthorized.status, 401);
+
+  const clientUser = await createSyntheticUser({ role: "client" });
+  const clientCookie = await loginAndGetCookie(clientUser.email);
+  const forbidden = await request(app)
+    .patch(`/customers/${customer.id}/account`)
+    .set("Cookie", clientCookie)
+    .send({ email: `forbidden-${randomUUID()}${testEmailDomain}` });
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.body.error.code, "FORBIDDEN");
+
+  const employee = await createSyntheticUser({ role: "employee" });
+  const employeeCookie = await loginAndGetCookie(employee.email);
+  const missing = await request(app)
+    .patch(`/customers/${randomUUID()}/account`)
+    .set("Cookie", employeeCookie)
+    .send({ email: `missing-${randomUUID()}${testEmailDomain}` });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.code, "CUSTOMER_NOT_FOUND");
+
+  const empty = await request(app)
+    .patch(`/customers/${customer.id}/account`)
+    .set("Cookie", employeeCookie)
+    .send({});
+  assert.equal(empty.status, 400);
+  assert.equal(empty.body.error.code, "VALIDATION_ERROR");
+});
+
+test("PATCH /customers/:id/account exige customers.manage_account", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const customer = await createCustomerDirect();
+
+  runAdminSql(`
+    DELETE FROM public.role_permissions AS role_permissions
+    USING public.roles AS roles, public.permissions AS permissions
+    WHERE role_permissions.role_id = roles.id
+      AND role_permissions.permission_id = permissions.id
+      AND roles.slug = 'employee'
+      AND permissions.key = 'customers.manage_account';
+  `);
+
+  try {
+    const response = await request(app)
+      .patch(`/customers/${customer.id}/account`)
+      .set("Cookie", cookie)
+      .send({ email: `denied-${randomUUID()}${testEmailDomain}` });
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, "FORBIDDEN");
+  } finally {
+    runAdminSql(`
+      INSERT INTO public.role_permissions (role_id, permission_id)
+      SELECT roles.id, permissions.id
+      FROM public.roles AS roles
+      CROSS JOIN public.permissions AS permissions
+      WHERE roles.slug = 'employee'
+        AND permissions.key = 'customers.manage_account'
+      ON CONFLICT (role_id, permission_id) DO NOTHING;
+    `);
+  }
+});
+
+test("PATCH /customers/:id/account valida email único case-insensitive", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const first = await createCustomerDirect();
+  const second = await createCustomerDirect();
+
+  const response = await request(app)
+    .patch(`/customers/${second.id}/account`)
+    .set("Cookie", cookie)
+    .send({ email: first.email!.toUpperCase() });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, "EMAIL_ALREADY_EXISTS");
+  const unchanged = await pool.query<{ email: string | null }>(
+    "SELECT email FROM auth.users WHERE id = $1",
+    [second.id],
+  );
+  assert.equal(unchanged.rows[0]?.email, second.email);
+});
+
+test("PATCH /customers/:id/account establece primera contraseña y exige email", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const withoutEmail = await createCustomerDirect({ email: null });
+  const newEmail = `first-password-${randomUUID()}${testEmailDomain}`;
+  const newPassword = "PrimeraClaveLocal123";
+
+  const rejected = await request(app)
+    .patch(`/customers/${withoutEmail.id}/account`)
+    .set("Cookie", cookie)
+    .send({ new_password: newPassword });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error.code, "PASSWORD_REQUIRES_EMAIL");
+
+  const response = await request(app)
+    .patch(`/customers/${withoutEmail.id}/account`)
+    .set("Cookie", cookie)
+    .send({ email: newEmail.toUpperCase(), new_password: newPassword });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.account.email, newEmail);
+  assert.equal(response.body.account.has_password, true);
+  assert.equal(response.body.account.login_enabled, true);
+  assertNoSensitiveFields(response.body);
+
+  const loginResponse = await request(app).post("/auth/login").send({
+    email: newEmail,
+    password: newPassword,
+  });
+  assert.equal(loginResponse.status, 200);
+});
+
+test("PATCH /customers/:id/account cambia contraseña, revoca todas las sesiones y habilita el nuevo login", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const employeeCookie = await loginAndGetCookie(employee.email);
+  const email = `session-revoke-${randomUUID()}${testEmailDomain}`;
+  const initialPassword = "ClaveInicialLocal123";
+  const newPassword = "ClaveNuevaLocal456";
+  const created = await request(app)
+    .post("/customers")
+    .set("Cookie", employeeCookie)
+    .send(buildCustomerPayload({ email, password: initialPassword }));
+  assert.equal(created.status, 201);
+
+  const firstSession = await loginAndGetCookie(email, initialPassword);
+  const secondSession = await loginAndGetCookie(email, initialPassword);
+  const response = await request(app)
+    .patch(`/customers/${created.body.id}/account`)
+    .set("Cookie", employeeCookie)
+    .send({ new_password: newPassword });
+  assert.equal(response.status, 200);
+  assertNoSensitiveFields(response.body);
+
+  for (const sessionCookie of [firstSession, secondSession]) {
+    const me = await request(app)
+      .get("/auth/me")
+      .set("Cookie", sessionCookie);
+    assert.equal(me.status, 401);
+  }
+
+  const oldLogin = await request(app).post("/auth/login").send({
+    email,
+    password: initialPassword,
+  });
+  assert.equal(oldLogin.status, 401);
+  const newLogin = await request(app).post("/auth/login").send({
+    email,
+    password: newPassword,
+  });
+  assert.equal(newLogin.status, 200);
+
+  const sessions = await pool.query<{ active: string }>(
+    `
+      SELECT count(*) FILTER (WHERE revoked_at IS NULL)::text AS active
+      FROM auth.sessions
+      WHERE user_id = $1
+        AND id NOT IN (
+          SELECT id FROM auth.sessions
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        )
+    `,
+    [created.body.id],
+  );
+  assert.equal(sessions.rows[0]?.active, "0");
+});
+
+test("PATCH /customers/:id/account cambia solo email y revoca las sesiones", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const employeeCookie = await loginAndGetCookie(employee.email);
+  const email = `email-change-${randomUUID()}${testEmailDomain}`;
+  const nextEmail = `email-changed-${randomUUID()}${testEmailDomain}`;
+  const password = "ClaveEmailLocal123";
+  const created = await request(app)
+    .post("/customers")
+    .set("Cookie", employeeCookie)
+    .send(buildCustomerPayload({ email, password }));
+  assert.equal(created.status, 201);
+
+  const customerSession = await loginAndGetCookie(email, password);
+  const response = await request(app)
+    .patch(`/customers/${created.body.id}/account`)
+    .set("Cookie", employeeCookie)
+    .send({ email: nextEmail.toUpperCase() });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.account.email, nextEmail);
+  assertNoSensitiveFields(response.body);
+
+  const me = await request(app)
+    .get("/auth/me")
+    .set("Cookie", customerSession);
+  assert.equal(me.status, 401);
+
+  const oldEmailLogin = await request(app).post("/auth/login").send({
+    email,
+    password,
+  });
+  assert.equal(oldEmailLogin.status, 401);
+  const newEmailLogin = await request(app).post("/auth/login").send({
+    email: nextEmail,
+    password,
+  });
+  assert.equal(newEmailLogin.status, 200);
+});
+
+test("PATCH /customers/:id/account revierte credenciales si falla la revocación", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const employeeCookie = await loginAndGetCookie(employee.email);
+  const email = `account-rollback-${randomUUID()}${testEmailDomain}`;
+  const initialPassword = "ClaveRollbackInicial123";
+  const created = await request(app)
+    .post("/customers")
+    .set("Cookie", employeeCookie)
+    .send(buildCustomerPayload({ email, password: initialPassword }));
+  assert.equal(created.status, 201);
+  await loginAndGetCookie(email, initialPassword);
+  const nextEmail = `account-next-${randomUUID()}${testEmailDomain}`;
+
+  runAdminSql(`
+    CREATE OR REPLACE FUNCTION auth.fail_customer_session_revoke_for_tests()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF OLD.user_id = '${created.body.id}'::uuid THEN
+        RAISE EXCEPTION 'forced account rollback';
+      END IF;
+      RETURN NEW;
+    END;
+    $$;
+    DROP TRIGGER IF EXISTS fail_customer_session_revoke_for_tests
+    ON auth.sessions;
+    CREATE TRIGGER fail_customer_session_revoke_for_tests
+    BEFORE UPDATE ON auth.sessions
+    FOR EACH ROW
+    EXECUTE FUNCTION auth.fail_customer_session_revoke_for_tests();
+  `);
+
+  try {
+    const response = await request(app)
+      .patch(`/customers/${created.body.id}/account`)
+      .set("Cookie", employeeCookie)
+      .send({ email: nextEmail, new_password: "ClaveRollbackNueva456" });
+    assert.equal(response.status, 500);
+
+    const user = await pool.query<{
+      email: string;
+      encrypted_password: string;
+    }>(
+      "SELECT email, encrypted_password FROM auth.users WHERE id = $1",
+      [created.body.id],
+    );
+    assert.equal(user.rows[0]?.email, email);
+    assert.equal(
+      await bcrypt.compare(initialPassword, user.rows[0]!.encrypted_password),
+      true,
+    );
+  } finally {
+    runAdminSql(`
+      DROP TRIGGER IF EXISTS fail_customer_session_revoke_for_tests
+      ON auth.sessions;
+      DROP FUNCTION IF EXISTS auth.fail_customer_session_revoke_for_tests();
+    `);
+  }
 });
 
 test("GET /customers/:id/history aplica límites, paginación, timezone y omite pagos sin payments.view", { concurrency: false }, async () => {
@@ -1459,6 +1788,20 @@ test("0006 es idempotente", { concurrency: false }, () => {
   const migrationPath = path.join(
     projectRoot,
     "database/migrations/0006_customers_read_history.sql",
+  );
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    execFileSync(
+      "psql",
+      ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-f", migrationPath],
+      { cwd: projectRoot, stdio: "ignore" },
+    );
+  }
+});
+
+test("0007 de cuentas de clientes es idempotente", { concurrency: false }, () => {
+  const migrationPath = path.join(
+    projectRoot,
+    "database/migrations/0007_customers_account_local.sql",
   );
   for (let attempt = 0; attempt < 2; attempt += 1) {
     execFileSync(

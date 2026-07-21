@@ -42,17 +42,23 @@ export type CustomerCreateInput = {
   birth_date: string;
   gender: CustomerGender;
   email?: string;
+  password?: string;
   injuries?: string;
   medical_notes?: string;
   membership?: CreateMembershipInput;
 };
 
 export type CustomerUpdateInput = Partial<
-  Omit<CustomerCreateInput, "email" | "membership">
+  Omit<CustomerCreateInput, "email" | "membership" | "password">
 >;
 
 export type CustomerStatusUpdateInput = {
   is_active: boolean;
+};
+
+export type CustomerAccountUpdateInput = {
+  email?: string;
+  new_password?: string;
 };
 
 export type CustomerMembershipSummary = {
@@ -94,6 +100,7 @@ export type CustomerDetail = CustomerListItem & {
   };
   capabilities: {
     update_customer: boolean;
+    manage_account: boolean;
     manage_membership: boolean;
     view_payments: boolean;
   };
