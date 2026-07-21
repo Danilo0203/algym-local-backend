@@ -10,6 +10,12 @@ dotenv.config({
 
 const targetDatabaseName = "algym_test";
 
+if (process.env.DB_NAME?.trim() !== targetDatabaseName) {
+  throw new Error(
+    `DB_NAME debe ser exactamente ${targetDatabaseName} antes de recrear la base de pruebas.`,
+  );
+}
+
 const dbHost = process.env.DB_HOST?.trim() || "127.0.0.1";
 const dbPort = process.env.DB_PORT?.trim() || "5432";
 const adminUser = process.env.TEST_DB_ADMIN_USER?.trim() || "";
@@ -49,6 +55,7 @@ const syntheticAuthorizationSeedSql = `
     ('customers.view', 'Permiso sintético customers.view', 'customers', 'view'),
     ('dashboard.view', 'Permiso sintético dashboard.view', 'dashboard', 'view'),
     ('plans.view', 'Permiso sintético plans.view', 'plans', 'view'),
+    ('payments.view', 'Permiso sintético payments.view', 'payments', 'view'),
     ('profile.update', 'Permiso sintético profile.update', 'profile', 'update'),
     ('profile.view', 'Permiso sintético profile.view', 'profile', 'view'),
     ('roles.view', 'Permiso sintético roles.view', 'roles', 'view'),
@@ -63,7 +70,7 @@ const syntheticAuthorizationSeedSql = `
   FROM public.roles AS r
   JOIN public.permissions AS p
     ON (
-      (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.manage_membership', 'customers.update', 'customers.view', 'dashboard.view', 'plans.view', 'profile.view', 'profile.update'))
+      (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.manage_membership', 'customers.update', 'customers.view', 'dashboard.view', 'payments.view', 'plans.view', 'profile.view', 'profile.update'))
       OR (r.slug = 'owner' AND p.key IN ('dashboard.view', 'roles.view', 'users.view'))
     )
   ON CONFLICT (role_id, permission_id) DO NOTHING;
@@ -112,6 +119,7 @@ for (const migrationName of [
   "0003_local_auth_sessions.sql",
   "0004_customers_phase_a.sql",
   "0005_memberships_phase_b.sql",
+  "0006_customers_read_history.sql",
 ]) {
   runCommand("psql", [
     ...connectionArguments,

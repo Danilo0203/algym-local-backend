@@ -6,11 +6,13 @@ import {
   validateSessionToken,
 } from "../auth/auth.service.js";
 import { membershipsRouter } from "../memberships/memberships.routes.js";
+import { getCustomerHistory } from "./customers-history.service.js";
 import { customerIdParamSchema } from "./customers.schemas.js";
 import {
   createCustomer,
   getCustomerById,
   listCustomers,
+  listCustomerSidebar,
   updateCustomer,
   updateCustomerStatus,
 } from "./customers.service.js";
@@ -18,6 +20,21 @@ import {
 export const customersRouter = Router();
 
 customersRouter.use("/:id/membership", membershipsRouter);
+
+customersRouter.get("/sidebar", async (request, response, next) => {
+  try {
+    const token = readSessionTokenFromRequest(request);
+    const session = await validateSessionToken(token);
+    const customers = await listCustomerSidebar(
+      session.userId,
+      request.query,
+    );
+
+    response.status(200).json(customers);
+  } catch (error) {
+    next(error);
+  }
+});
 
 customersRouter.get("/", async (request, response, next) => {
   try {
@@ -33,6 +50,26 @@ customersRouter.get("/", async (request, response, next) => {
     next(error);
   }
 });
+
+customersRouter.get(
+  "/:id/history",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(request.params.id);
+      const history = await getCustomerHistory(
+        session.userId,
+        customerId,
+        request.query,
+      );
+
+      response.status(200).json(history);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 customersRouter.get(
   "/:id",
