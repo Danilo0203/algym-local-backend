@@ -28,7 +28,8 @@ type TestUserRole =
   | "admin"
   | "client"
   | "employee"
-  | "owner";
+  | "owner"
+  | "trainer";
 
 type SyntheticUser = {
   email: string;
@@ -1271,7 +1272,7 @@ test("GET /customers/:id devuelve cuenta segura y capacidades por permiso", { co
   assert.equal(response.body.account.login_enabled, false);
   assert.deepEqual(response.body.capabilities, {
     update_customer: true,
-    manage_account: true,
+    manage_account: false,
     manage_membership: true,
     view_payments: true,
   });
@@ -1297,60 +1298,44 @@ test("PATCH /customers/:id/account cubre 401, 403, 404 y cuerpo vacío", { concu
   assert.equal(forbidden.status, 403);
   assert.equal(forbidden.body.error.code, "FORBIDDEN");
 
-  const employee = await createSyntheticUser({ role: "employee" });
-  const employeeCookie = await loginAndGetCookie(employee.email);
+  const admin = await createSyntheticUser({ role: "admin" });
+  const adminCookie = await loginAndGetCookie(admin.email);
   const missing = await request(app)
     .patch(`/customers/${randomUUID()}/account`)
-    .set("Cookie", employeeCookie)
+    .set("Cookie", adminCookie)
     .send({ email: `missing-${randomUUID()}${testEmailDomain}` });
   assert.equal(missing.status, 404);
   assert.equal(missing.body.error.code, "CUSTOMER_NOT_FOUND");
 
   const empty = await request(app)
     .patch(`/customers/${customer.id}/account`)
-    .set("Cookie", employeeCookie)
+    .set("Cookie", adminCookie)
     .send({});
   assert.equal(empty.status, 400);
   assert.equal(empty.body.error.code, "VALIDATION_ERROR");
 });
 
-test("PATCH /customers/:id/account exige customers.manage_account", { concurrency: false }, async () => {
-  const employee = await createSyntheticUser({ role: "employee" });
-  const cookie = await loginAndGetCookie(employee.email);
+test("PATCH /customers/:id/account rechaza roles sin customers.manage_account", { concurrency: false }, async () => {
   const customer = await createCustomerDirect();
 
-  runAdminSql(`
-    DELETE FROM public.role_permissions AS role_permissions
-    USING public.roles AS roles, public.permissions AS permissions
-    WHERE role_permissions.role_id = roles.id
-      AND role_permissions.permission_id = permissions.id
-      AND roles.slug = 'employee'
-      AND permissions.key = 'customers.manage_account';
-  `);
-
-  try {
+  for (const role of ["employee", "trainer", "client"] as const) {
+    const user = await createSyntheticUser({ role });
+    const cookie = await loginAndGetCookie(user.email);
     const response = await request(app)
       .patch(`/customers/${customer.id}/account`)
       .set("Cookie", cookie)
-      .send({ email: `denied-${randomUUID()}${testEmailDomain}` });
+      .send({
+        email: `denied-${role}-${randomUUID()}${testEmailDomain}`,
+      });
+
     assert.equal(response.status, 403);
     assert.equal(response.body.error.code, "FORBIDDEN");
-  } finally {
-    runAdminSql(`
-      INSERT INTO public.role_permissions (role_id, permission_id)
-      SELECT roles.id, permissions.id
-      FROM public.roles AS roles
-      CROSS JOIN public.permissions AS permissions
-      WHERE roles.slug = 'employee'
-        AND permissions.key = 'customers.manage_account'
-      ON CONFLICT (role_id, permission_id) DO NOTHING;
-    `);
   }
 });
 
 test("PATCH /customers/:id/account valida email único case-insensitive", { concurrency: false }, async () => {
-  const employee = await createSyntheticUser({ role: "employee" });
-  const cookie = await loginAndGetCookie(employee.email);
+  const admin = await createSyntheticUser({ role: "admin" });
+  const cookie = await loginAndGetCookie(admin.email);
   const first = await createCustomerDirect();
   const second = await createCustomerDirect();
 
@@ -1369,8 +1354,8 @@ test("PATCH /customers/:id/account valida email único case-insensitive", { conc
 });
 
 test("PATCH /customers/:id/account establece primera contraseña y exige email", { concurrency: false }, async () => {
-  const employee = await createSyntheticUser({ role: "employee" });
-  const cookie = await loginAndGetCookie(employee.email);
+  const admin = await createSyntheticUser({ role: "admin" });
+  const cookie = await loginAndGetCookie(admin.email);
   const withoutEmail = await createCustomerDirect({ email: null });
   const newEmail = `first-password-${randomUUID()}${testEmailDomain}`;
   const newPassword = "PrimeraClaveLocal123";
@@ -1390,6 +1375,7 @@ test("PATCH /customers/:id/account establece primera contraseña y exige email",
   assert.equal(response.body.account.email, newEmail);
   assert.equal(response.body.account.has_password, true);
   assert.equal(response.body.account.login_enabled, true);
+  assert.equal(response.body.capabilities.manage_account, true);
   assertNoSensitiveFields(response.body);
 
   const loginResponse = await request(app).post("/auth/login").send({
@@ -1402,6 +1388,8 @@ test("PATCH /customers/:id/account establece primera contraseña y exige email",
 test("PATCH /customers/:id/account cambia contraseña, revoca todas las sesiones y habilita el nuevo login", { concurrency: false }, async () => {
   const employee = await createSyntheticUser({ role: "employee" });
   const employeeCookie = await loginAndGetCookie(employee.email);
+  const admin = await createSyntheticUser({ role: "admin" });
+  const adminCookie = await loginAndGetCookie(admin.email);
   const email = `session-revoke-${randomUUID()}${testEmailDomain}`;
   const initialPassword = "ClaveInicialLocal123";
   const newPassword = "ClaveNuevaLocal456";
@@ -1415,7 +1403,7 @@ test("PATCH /customers/:id/account cambia contraseña, revoca todas las sesiones
   const secondSession = await loginAndGetCookie(email, initialPassword);
   const response = await request(app)
     .patch(`/customers/${created.body.id}/account`)
-    .set("Cookie", employeeCookie)
+    .set("Cookie", adminCookie)
     .send({ new_password: newPassword });
   assert.equal(response.status, 200);
   assertNoSensitiveFields(response.body);
@@ -1458,6 +1446,8 @@ test("PATCH /customers/:id/account cambia contraseña, revoca todas las sesiones
 test("PATCH /customers/:id/account cambia solo email y revoca las sesiones", { concurrency: false }, async () => {
   const employee = await createSyntheticUser({ role: "employee" });
   const employeeCookie = await loginAndGetCookie(employee.email);
+  const owner = await createSyntheticUser({ role: "owner" });
+  const ownerCookie = await loginAndGetCookie(owner.email);
   const email = `email-change-${randomUUID()}${testEmailDomain}`;
   const nextEmail = `email-changed-${randomUUID()}${testEmailDomain}`;
   const password = "ClaveEmailLocal123";
@@ -1470,7 +1460,7 @@ test("PATCH /customers/:id/account cambia solo email y revoca las sesiones", { c
   const customerSession = await loginAndGetCookie(email, password);
   const response = await request(app)
     .patch(`/customers/${created.body.id}/account`)
-    .set("Cookie", employeeCookie)
+    .set("Cookie", ownerCookie)
     .send({ email: nextEmail.toUpperCase() });
   assert.equal(response.status, 200);
   assert.equal(response.body.account.email, nextEmail);
@@ -1496,6 +1486,8 @@ test("PATCH /customers/:id/account cambia solo email y revoca las sesiones", { c
 test("PATCH /customers/:id/account revierte credenciales si falla la revocación", { concurrency: false }, async () => {
   const employee = await createSyntheticUser({ role: "employee" });
   const employeeCookie = await loginAndGetCookie(employee.email);
+  const admin = await createSyntheticUser({ role: "admin" });
+  const adminCookie = await loginAndGetCookie(admin.email);
   const email = `account-rollback-${randomUUID()}${testEmailDomain}`;
   const initialPassword = "ClaveRollbackInicial123";
   const created = await request(app)
@@ -1529,7 +1521,7 @@ test("PATCH /customers/:id/account revierte credenciales si falla la revocación
   try {
     const response = await request(app)
       .patch(`/customers/${created.body.id}/account`)
-      .set("Cookie", employeeCookie)
+      .set("Cookie", adminCookie)
       .send({ email: nextEmail, new_password: "ClaveRollbackNueva456" });
     assert.equal(response.status, 500);
 

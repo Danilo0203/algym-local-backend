@@ -24,6 +24,7 @@ const currentDirectory = path.dirname(
 const projectRoot = path.resolve(currentDirectory, "../..");
 
 const rolePermissionFixtures = {
+  admin: ["customers.manage_account"],
   client: [] as string[],
   employee: [
     "customers.view",
@@ -32,6 +33,7 @@ const rolePermissionFixtures = {
     "profile.view",
   ],
   owner: ["roles.view", "users.view", "dashboard.view"],
+  trainer: [] as string[],
 } satisfies Record<string, string[]>;
 
 function assertNoSensitiveFields(payload: unknown): void {
@@ -193,6 +195,26 @@ test("POST /auth/login devuelve authorization y rechaza datos sensibles", async 
     /algym_session=/,
   );
   assertNoSensitiveFields(response.body);
+
+  const admin = await createSyntheticUser({ role: "admin" });
+  const adminAgent = request.agent(app);
+  const adminLogin = await adminAgent.post("/auth/login").send({
+    email: admin.email,
+    password: testPassword,
+  });
+
+  assert.equal(adminLogin.status, 200);
+  assert.deepEqual(adminLogin.body.authorization, {
+    roleSlug: "admin",
+    scope: "panel",
+    permissions: ["customers.manage_account"],
+    isOwner: false,
+  });
+
+  const adminMe = await adminAgent.get("/auth/me");
+  assert.equal(adminMe.status, 200);
+  assert.deepEqual(adminMe.body, adminLogin.body);
+  assertNoSensitiveFields(adminMe.body);
 });
 
 test("GET /auth/me devuelve exactamente el mismo contexto que login", async () => {
@@ -214,7 +236,6 @@ test("GET /auth/me devuelve exactamente el mismo contexto que login", async () =
   assert.deepEqual(meResponse.body, loginResponse.body);
   assert.deepEqual(meResponse.body.authorization.permissions, [
     "customers.create",
-    "customers.manage_account",
     "customers.manage_membership",
     "customers.update",
     "customers.view",
