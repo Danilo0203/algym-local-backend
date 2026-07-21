@@ -48,6 +48,50 @@ WITH CHECK (
 );
 
 DO $$
+DECLARE
+  v_plans_id_sequence regclass;
+  v_max_plan_id bigint;
+  v_sequence_last_value bigint;
+  v_sequence_is_called boolean;
+BEGIN
+  v_plans_id_sequence := pg_get_serial_sequence(
+    'public.plans',
+    'id'
+  )::regclass;
+
+  IF v_plans_id_sequence IS NULL THEN
+    RAISE EXCEPTION
+      'No se encontró la secuencia asociada a public.plans.id.';
+  END IF;
+
+  LOCK TABLE public.plans IN SHARE ROW EXCLUSIVE MODE;
+
+  SELECT max(id)::bigint
+  INTO v_max_plan_id
+  FROM public.plans;
+
+  IF v_max_plan_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  EXECUTE format(
+    'SELECT last_value, is_called FROM %s',
+    v_plans_id_sequence
+  )
+  INTO v_sequence_last_value, v_sequence_is_called;
+
+  IF v_sequence_last_value < v_max_plan_id
+    OR (
+      v_sequence_last_value = v_max_plan_id
+      AND NOT v_sequence_is_called
+    )
+  THEN
+    PERFORM setval(v_plans_id_sequence, v_max_plan_id, true);
+  END IF;
+END
+$$;
+
+DO $$
 BEGIN
   IF EXISTS (
     SELECT 1
