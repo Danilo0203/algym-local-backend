@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { createMembershipSchema } from "../memberships/memberships.schemas.js";
+
 import type {
   CustomerCreateInput,
   CustomerDetail,
@@ -161,6 +163,7 @@ export const customerCreateSchema = z
       ),
     injuries: nullableTrimmedTextSchema,
     medical_notes: nullableTrimmedTextSchema,
+    membership: createMembershipSchema.optional(),
   })
   .strict() satisfies z.ZodType<CustomerCreateInput>;
 

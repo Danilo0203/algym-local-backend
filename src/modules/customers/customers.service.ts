@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { createMembershipForCustomerInTransaction } from "../memberships/memberships.service.js";
 import {
   customerCreateSchema,
   customerDetailSchema,
@@ -66,6 +67,7 @@ type QueryableError = {
 const customersViewPermission = "customers.view";
 const customersCreatePermission = "customers.create";
 const customersUpdatePermission = "customers.update";
+const customersManageMembershipPermission = "customers.manage_membership";
 
 const customerNotFoundError = new AppError(
   404,
@@ -470,6 +472,17 @@ export async function createCustomer(
 
     const input = customerCreateSchema.parse(body);
 
+    if (
+      input.membership &&
+      !hasPermission(authorization, customersManageMembershipPermission)
+    ) {
+      throw new AppError(
+        403,
+        "FORBIDDEN",
+        "No autorizado para administrar membresías",
+      );
+    }
+
     try {
       const result = await client.query<CreateCustomerRow>(
         `
@@ -501,6 +514,14 @@ export async function createCustomer(
           500,
           "CUSTOMER_CREATE_FAILED",
           "No se pudo crear el cliente",
+        );
+      }
+
+      if (input.membership) {
+        await createMembershipForCustomerInTransaction(
+          client,
+          customerId,
+          input.membership,
         );
       }
 

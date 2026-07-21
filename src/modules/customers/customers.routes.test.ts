@@ -80,6 +80,13 @@ async function cleanupSyntheticUsers(): Promise<void> {
   );
 
   runAdminSql(`
+    DELETE FROM public.subscriptions
+    WHERE user_id IN (
+      SELECT id
+      FROM auth.users
+      WHERE email LIKE '%${testEmailDomain}'
+    );
+
     DELETE FROM public.access_logs
     WHERE user_id IN (
       SELECT id
@@ -93,6 +100,9 @@ async function cleanupSyntheticUsers(): Promise<void> {
       FROM auth.users
       WHERE email LIKE '%${testEmailDomain}'
     );
+
+    DELETE FROM public.plans
+    WHERE name LIKE '${testNamePrefix}%';
   `);
 
   await pool.query(
@@ -575,6 +585,108 @@ test("POST /customers normaliza email vacio a NULL", { concurrency: false }, asy
   );
 
   assert.equal(authUser.rows[0]?.email, null);
+});
+
+test("POST /customers crea núcleo y membresía en una sola transacción", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const planId = 900000 + Math.floor(Math.random() * 90000);
+
+  runAdminSql(`
+    INSERT INTO public.plans (id, name, price, duration_days, is_active)
+    VALUES (${planId}, '${testNamePrefix} Plan atómico', 250, 30, true);
+  `);
+
+  const response = await request(app)
+    .post("/customers")
+    .set("Cookie", cookie)
+    .send(buildCustomerPayload({
+      membership: {
+        plan_id: planId,
+        cycles: 2,
+        start_date: "2026-07-21",
+      },
+    }));
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.current_membership.plan_name, `${testNamePrefix} Plan atómico`);
+  assert.equal(response.body.current_membership.status, "active");
+  assert.equal(response.body.current_membership.start_date, "2026-07-21");
+  assert.equal(response.body.current_membership.end_date, "2026-09-19");
+  assert.equal(response.body.current_membership.grace_days, 3);
+});
+
+test("POST /customers con membresía exige customers.manage_membership y revierte el núcleo", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const email = `forbidden-membership-${randomUUID()}${testEmailDomain}`;
+
+  runAdminSql(`
+    DELETE FROM public.role_permissions AS role_permissions
+    USING public.roles AS roles, public.permissions AS permissions
+    WHERE role_permissions.role_id = roles.id
+      AND role_permissions.permission_id = permissions.id
+      AND roles.slug = 'employee'
+      AND permissions.key = 'customers.manage_membership';
+  `);
+
+  try {
+    const response = await request(app)
+      .post("/customers")
+      .set("Cookie", cookie)
+      .send(buildCustomerPayload({
+        email,
+        membership: {
+          plan_id: 1,
+          cycles: 1,
+        },
+      }));
+
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, "FORBIDDEN");
+
+    const remaining = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM auth.users WHERE email = $1`,
+      [email],
+    );
+    assert.equal(remaining.rows[0]?.count, "0");
+  } finally {
+    runAdminSql(`
+      INSERT INTO public.role_permissions (role_id, permission_id)
+      SELECT roles.id, permissions.id
+      FROM public.roles AS roles
+      CROSS JOIN public.permissions AS permissions
+      WHERE roles.slug = 'employee'
+        AND permissions.key = 'customers.manage_membership'
+      ON CONFLICT (role_id, permission_id) DO NOTHING;
+    `);
+  }
+});
+
+test("POST /customers revierte el núcleo cuando falla la membresía", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const cookie = await loginAndGetCookie(employee.email);
+  const email = `rollback-${randomUUID()}${testEmailDomain}`;
+
+  const response = await request(app)
+    .post("/customers")
+    .set("Cookie", cookie)
+    .send(buildCustomerPayload({
+      email,
+      membership: {
+        plan_id: 2147483647,
+        cycles: 1,
+      },
+    }));
+
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error.code, "PLAN_NOT_FOUND");
+
+  const remaining = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM auth.users WHERE email = $1`,
+    [email],
+  );
+  assert.equal(remaining.rows[0]?.count, "0");
 });
 
 test("POST /customers con email duplicado devuelve 409 sin filas parciales", { concurrency: false }, async () => {

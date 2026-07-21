@@ -1,3 +1,5 @@
+import type { CreateMembershipInput } from "../memberships/memberships.types.js";
+
 export type CustomerGender = "male" | "female" | "other";
 
 export type CustomerListQuery = {
@@ -15,10 +17,11 @@ export type CustomerCreateInput = {
   email?: string;
   injuries?: string;
   medical_notes?: string;
+  membership?: CreateMembershipInput;
 };
 
 export type CustomerUpdateInput = Partial<
-  Omit<CustomerCreateInput, "email">
+  Omit<CustomerCreateInput, "email" | "membership">
 >;
 
 export type CustomerStatusUpdateInput = {
