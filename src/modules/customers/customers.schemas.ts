@@ -93,6 +93,11 @@ export const customerDetailSchema = customerListItemSchema.extend({
   role: z.string(),
   injuries: z.string().nullable(),
   medical_notes: z.string().nullable(),
+  health_profile_status: z.enum([
+    "pending",
+    "completed",
+    "requires_attention",
+  ]),
   account: z.object({
     email: z.email().nullable(),
     has_password: z.boolean(),
@@ -103,6 +108,10 @@ export const customerDetailSchema = customerListItemSchema.extend({
     manage_account: z.boolean(),
     manage_membership: z.boolean(),
     view_payments: z.boolean(),
+    view_health_profile: z.boolean(),
+    manage_health_profile: z.boolean(),
+    view_body_assessments: z.boolean(),
+    manage_body_assessments: z.boolean(),
   }),
 }) satisfies z.ZodType<CustomerDetail>;
 

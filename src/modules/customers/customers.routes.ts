@@ -6,6 +6,14 @@ import {
   validateSessionToken,
 } from "../auth/auth.service.js";
 import { membershipsRouter } from "../memberships/memberships.routes.js";
+import {
+  createCustomerBodyAssessment,
+  getCustomerHealthProfile,
+  listCustomerBodyAssessments,
+  updateCustomerBodyAssessment,
+  updateCustomerHealthProfile,
+} from "./customers-health.service.js";
+import { bodyAssessmentIdParamSchema } from "./customers-health.schemas.js";
 import { getCustomerHistory } from "./customers-history.service.js";
 import { customerIdParamSchema } from "./customers.schemas.js";
 import {
@@ -66,6 +74,109 @@ customersRouter.get(
       );
 
       response.status(200).json(history);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+customersRouter.get(
+  "/:id/health-profile",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(request.params.id);
+      const profile = await getCustomerHealthProfile(
+        session.userId,
+        customerId,
+      );
+
+      response.status(200).json(profile);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+customersRouter.patch(
+  "/:id/health-profile",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(request.params.id);
+      const profile = await updateCustomerHealthProfile(
+        session.userId,
+        customerId,
+        request.body,
+      );
+
+      response.status(200).json(profile);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+customersRouter.get(
+  "/:id/body-assessments",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(request.params.id);
+      const assessments = await listCustomerBodyAssessments(
+        session.userId,
+        customerId,
+        request.query,
+      );
+
+      response.status(200).json(assessments);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+customersRouter.post(
+  "/:id/body-assessments",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(request.params.id);
+      const assessment = await createCustomerBodyAssessment(
+        session.userId,
+        customerId,
+        request.body,
+      );
+
+      response.status(201).json(assessment);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+customersRouter.patch(
+  "/:id/body-assessments/:assessment_id",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(request.params.id);
+      const assessmentId = bodyAssessmentIdParamSchema.parse(
+        request.params.assessment_id,
+      );
+      const assessment = await updateCustomerBodyAssessment(
+        session.userId,
+        customerId,
+        assessmentId,
+        request.body,
+      );
+
+      response.status(200).json(assessment);
     } catch (error) {
       next(error);
     }

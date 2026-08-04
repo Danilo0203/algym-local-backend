@@ -2,6 +2,12 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import {
+  mapBodyAssessmentRow,
+} from "./customers-health.service.js";
+import type {
+  BodyAssessmentRow,
+} from "./customers-health.service.js";
 import { customerHistoryQuerySchema } from "./customers.schemas.js";
 import type {
   CustomerHistoryResponse,
@@ -58,31 +64,6 @@ type PaymentRow = {
   amount_paid: string;
   method: string | null;
   plan_name: string | null;
-  total_count: string;
-};
-
-type AssessmentRow = {
-  id: string;
-  assessment_date: string;
-  weight_kg: string;
-  height_cm: string;
-  body_fat_percentage: string | null;
-  muscle_mass_kg: string | null;
-  body_type: string | null;
-  activity_level: string | null;
-  water_liters_goal: string | null;
-  daily_calories: number | null;
-  protein_grams: number | null;
-  carbs_grams: number | null;
-  fat_grams: number | null;
-  chest: string | null;
-  waist: string | null;
-  hip: string | null;
-  arm_right: string | null;
-  arm_left: string | null;
-  leg_right: string | null;
-  leg_left: string | null;
-  diet_type: string | null;
   total_count: string;
 };
 
@@ -277,10 +258,19 @@ export async function getCustomerHistory(
       [customerId],
     );
 
-    const assessmentsResult = await client.query<AssessmentRow>(
-      `
+    const canViewBodyAssessments = hasPermission(
+      authorization,
+      "body_assessments.view",
+    );
+    let assessmentRows: BodyAssessmentRow[] = [];
+    let assessmentTotal = 0;
+
+    if (canViewBodyAssessments) {
+      const assessmentsResult = await client.query<BodyAssessmentRow>(
+        `
         SELECT
           assessments.id,
+          assessments.user_id AS customer_id,
           to_char(assessments.date, 'YYYY-MM-DD') AS assessment_date,
           assessments.weight_kg,
           assessments.height_cm,
@@ -300,27 +290,36 @@ export async function getCustomerHistory(
           assessments.arm_left,
           assessments.leg_right,
           assessments.leg_left,
+          assessments.notes,
           assessments.diet_type,
+          assessments.created_at,
+          assessments.updated_at,
           count(*) OVER()::text AS total_count
         FROM public.body_assessments AS assessments
         WHERE assessments.user_id = $1
         ORDER BY assessments.date DESC, assessments.id DESC
         LIMIT $2 OFFSET $3
-      `,
-      [
-        customerId,
-        input.assessments_page_size,
-        (input.assessments_page - 1) * input.assessments_page_size,
-      ],
-    );
-    const assessmentsCountResult = await client.query<TotalRow>(
-      `
+        `,
+        [
+          customerId,
+          input.assessments_page_size,
+          (input.assessments_page - 1) * input.assessments_page_size,
+        ],
+      );
+      assessmentRows = assessmentsResult.rows;
+      const assessmentsCountResult = await client.query<TotalRow>(
+        `
         SELECT count(*)::text AS total
         FROM public.body_assessments
         WHERE user_id = $1
-      `,
-      [customerId],
-    );
+        `,
+        [customerId],
+      );
+      assessmentTotal = Number.parseInt(
+        assessmentsCountResult.rows[0]?.total ?? "0",
+        10,
+      );
+    }
 
     const kpiResult = await client.query<KpiRow>(
       `
@@ -346,19 +345,21 @@ export async function getCustomerHistory(
           (
             SELECT assessments.weight_kg::text
             FROM public.body_assessments AS assessments
-            WHERE assessments.user_id = $1
+            WHERE $3::boolean
+              AND assessments.user_id = $1
             ORDER BY assessments.date, assessments.id
             LIMIT 1
           ) AS initial_weight,
           (
             SELECT assessments.weight_kg::text
             FROM public.body_assessments AS assessments
-            WHERE assessments.user_id = $1
+            WHERE $3::boolean
+              AND assessments.user_id = $1
             ORDER BY assessments.date DESC, assessments.id DESC
             LIMIT 1
           ) AS current_weight
       `,
-      [customerId, customer.biometric_id],
+      [customerId, customer.biometric_id, canViewBodyAssessments],
     );
 
     const canViewPayments = hasPermission(authorization, "payments.view");
@@ -487,36 +488,14 @@ export async function getCustomerHistory(
             count: Number.parseInt(row.visit_count, 10),
           })),
       },
-      assessments: {
-        data: assessmentsResult.rows.map((row) => ({
-          id: row.id,
-          assessment_date: row.assessment_date,
-          weight_kg: toNumber(row.weight_kg),
-          height_cm: toNumber(row.height_cm),
-          body_fat_percentage: toNumber(row.body_fat_percentage),
-          muscle_mass_kg: toNumber(row.muscle_mass_kg),
-          body_type: row.body_type,
-          activity_level: row.activity_level,
-          water_liters_goal: toNumber(row.water_liters_goal),
-          daily_calories: row.daily_calories,
-          protein_grams: row.protein_grams,
-          carbs_grams: row.carbs_grams,
-          fat_grams: row.fat_grams,
-          chest: toNumber(row.chest),
-          waist: toNumber(row.waist),
-          hip: toNumber(row.hip),
-          arm_right: toNumber(row.arm_right),
-          arm_left: toNumber(row.arm_left),
-          leg_right: toNumber(row.leg_right),
-          leg_left: toNumber(row.leg_left),
-          diet_type: row.diet_type,
-        })),
+      assessments: canViewBodyAssessments ? {
+        data: assessmentRows.map(mapBodyAssessmentRow),
         meta: paginationMeta(
           input.assessments_page,
           input.assessments_page_size,
-          Number.parseInt(assessmentsCountResult.rows[0]?.total ?? "0", 10),
+          assessmentTotal,
         ),
-      },
+      } : null,
       kpis: {
         member_since: kpis.member_since,
         total_visits: Number.parseInt(kpis.total_visits, 10),
