@@ -193,3 +193,16 @@ runCommand("psql", [
     "0009_customers_health_assessments.sql",
   ),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(
+    migrationDirectory,
+    "0010_rbac_hardening.sql",
+  ),
+]);
