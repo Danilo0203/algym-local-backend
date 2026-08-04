@@ -1,4 +1,8 @@
 import type { CreateMembershipInput } from "../memberships/memberships.types.js";
+import type {
+  CustomerBodyAssessment,
+  CustomerHealthProfileStatus,
+} from "./customers-health.types.js";
 
 export type CustomerGender = "male" | "female" | "other";
 
@@ -93,6 +97,7 @@ export type CustomerDetail = CustomerListItem & {
   role: string;
   injuries: string | null;
   medical_notes: string | null;
+  health_profile_status: CustomerHealthProfileStatus;
   account: {
     email: string | null;
     has_password: boolean;
@@ -103,6 +108,10 @@ export type CustomerDetail = CustomerListItem & {
     manage_account: boolean;
     manage_membership: boolean;
     view_payments: boolean;
+    view_health_profile: boolean;
+    manage_health_profile: boolean;
+    view_body_assessments: boolean;
+    manage_body_assessments: boolean;
   };
 };
 
@@ -166,29 +175,7 @@ export type CustomerAttendanceHistoryItem = {
   status: "authorized" | "denied";
 };
 
-export type CustomerAssessmentHistoryItem = {
-  id: string;
-  assessment_date: string;
-  weight_kg: number | null;
-  height_cm: number | null;
-  body_fat_percentage: number | null;
-  muscle_mass_kg: number | null;
-  body_type: string | null;
-  activity_level: string | null;
-  water_liters_goal: number | null;
-  daily_calories: number | null;
-  protein_grams: number | null;
-  carbs_grams: number | null;
-  fat_grams: number | null;
-  chest: number | null;
-  waist: number | null;
-  hip: number | null;
-  arm_right: number | null;
-  arm_left: number | null;
-  leg_right: number | null;
-  leg_left: number | null;
-  diet_type: string | null;
-};
+export type CustomerAssessmentHistoryItem = CustomerBodyAssessment;
 
 export type CustomerHistoryResponse = {
   customer_id: string;
@@ -215,7 +202,7 @@ export type CustomerHistoryResponse = {
   assessments: {
     data: CustomerAssessmentHistoryItem[];
     meta: PaginationMeta;
-  };
+  } | null;
   kpis: {
     member_since: string | null;
     total_visits: number;

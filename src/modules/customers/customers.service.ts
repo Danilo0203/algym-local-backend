@@ -63,6 +63,10 @@ type CustomerDetailRow = CustomerListRow & {
   role: string;
   injuries: string | null;
   medical_notes: string | null;
+  health_profile_status:
+    | "pending"
+    | "completed"
+    | "requires_attention";
   has_password: boolean;
   login_enabled: boolean;
 };
@@ -88,6 +92,41 @@ const customersUpdatePermission = "customers.update";
 const customersManageAccountPermission = "customers.manage_account";
 const customersManageMembershipPermission = "customers.manage_membership";
 const paymentsViewPermission = "payments.view";
+const healthProfilesViewPermission = "customer_health_profiles.view";
+const healthProfilesManagePermission = "customer_health_profiles.manage";
+const bodyAssessmentsViewPermission = "body_assessments.view";
+const bodyAssessmentsManagePermission = "body_assessments.manage";
+
+const healthProfileHasSubstantiveDataSql = `
+  health_profile.parq_requires_attention IS NOT NULL
+  OR nullif(btrim(health_profile.parq_details), '') IS NOT NULL
+  OR nullif(btrim(health_profile.injuries_or_pain), '') IS NOT NULL
+  OR nullif(btrim(health_profile.medical_conditions), '') IS NOT NULL
+  OR nullif(btrim(health_profile.medications), '') IS NOT NULL
+  OR nullif(btrim(health_profile.medical_clearance_notes), '') IS NOT NULL
+  OR nullif(btrim(health_profile.restricted_movements), '') IS NOT NULL
+  OR nullif(btrim(health_profile.primary_goal), '') IS NOT NULL
+  OR nullif(btrim(health_profile.secondary_goal), '') IS NOT NULL
+  OR EXISTS (
+    SELECT 1
+    FROM unnest(health_profile.focus_areas) AS focus_area(value)
+    WHERE nullif(btrim(focus_area.value), '') IS NOT NULL
+  )
+  OR nullif(btrim(health_profile.experience_level), '') IS NOT NULL
+  OR health_profile.days_per_week IS NOT NULL
+  OR health_profile.session_minutes IS NOT NULL
+  OR nullif(btrim(health_profile.training_location), '') IS NOT NULL
+  OR EXISTS (
+    SELECT 1
+    FROM unnest(health_profile.equipment_available) AS equipment(value)
+    WHERE nullif(btrim(equipment.value), '') IS NOT NULL
+  )
+  OR nullif(btrim(health_profile.cardio_preference), '') IS NOT NULL
+  OR nullif(btrim(health_profile.exercise_preferences), '') IS NOT NULL
+  OR nullif(btrim(health_profile.exercise_dislikes), '') IS NOT NULL
+  OR nullif(btrim(health_profile.diet_type), '') IS NOT NULL
+  OR nullif(btrim(health_profile.activity_level), '') IS NOT NULL
+`;
 
 const customerNotFoundError = new AppError(
   404,
@@ -311,6 +350,7 @@ function mapCustomerDetail(
     role: row.role,
     injuries: row.injuries,
     medical_notes: row.medical_notes,
+    health_profile_status: row.health_profile_status,
     account: {
       email: row.email,
       has_password: row.has_password,
@@ -330,6 +370,22 @@ function mapCustomerDetail(
         customersManageMembershipPermission,
       ),
       view_payments: hasPermission(authorization, paymentsViewPermission),
+      view_health_profile: hasPermission(
+        authorization,
+        healthProfilesViewPermission,
+      ),
+      manage_health_profile: hasPermission(
+        authorization,
+        healthProfilesManagePermission,
+      ),
+      view_body_assessments: hasPermission(
+        authorization,
+        bodyAssessmentsViewPermission,
+      ),
+      manage_body_assessments: hasPermission(
+        authorization,
+        bodyAssessmentsManagePermission,
+      ),
     },
   });
 }
@@ -373,6 +429,14 @@ async function getCustomerDetailRow(
         profiles.role::text AS role,
         profiles.injuries,
         profiles.medical_notes,
+        CASE
+          WHEN health_profile.user_id IS NULL THEN 'pending'
+          WHEN health_profile.parq_requires_attention IS true
+            THEN 'requires_attention'
+          WHEN ${healthProfileHasSubstantiveDataSql}
+            THEN 'completed'
+          ELSE 'pending'
+        END AS health_profile_status,
         users.encrypted_password IS NOT NULL AS has_password,
         users.email IS NOT NULL
           AND users.encrypted_password IS NOT NULL
@@ -382,6 +446,8 @@ async function getCustomerDetailRow(
         ON profiles.id = overview.id
       INNER JOIN auth.users AS users
         ON users.id = overview.id
+      LEFT JOIN public.customer_health_profiles AS health_profile
+        ON health_profile.user_id = overview.id
       LEFT JOIN LATERAL (
         SELECT attendance.punch_time AS last_check_in
         FROM public.attendance_logs AS attendance

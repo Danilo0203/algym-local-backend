@@ -180,3 +180,16 @@ runCommand("psql", [
     "0008_admin_customers_view.sql",
   ),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(
+    migrationDirectory,
+    "0009_customers_health_assessments.sql",
+  ),
+]);
