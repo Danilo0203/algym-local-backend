@@ -24,7 +24,14 @@ const currentDirectory = path.dirname(
 const projectRoot = path.resolve(currentDirectory, "../..");
 
 const rolePermissionFixtures = {
-  admin: ["customers.manage_account", "customers.view"],
+  admin: [
+    "body_assessments.manage",
+    "body_assessments.view",
+    "customer_health_profiles.manage",
+    "customer_health_profiles.view",
+    "customers.manage_account",
+    "customers.view",
+  ],
   client: [] as string[],
   employee: [
     "customers.view",
@@ -33,7 +40,11 @@ const rolePermissionFixtures = {
     "profile.view",
   ],
   owner: ["roles.view", "users.view", "dashboard.view"],
-  trainer: [] as string[],
+  trainer: [
+    "body_assessments.manage",
+    "body_assessments.view",
+    "customer_health_profiles.view",
+  ],
 } satisfies Record<string, string[]>;
 
 function assertNoSensitiveFields(payload: unknown): void {
@@ -208,6 +219,10 @@ test("POST /auth/login devuelve authorization y rechaza datos sensibles", async 
     roleSlug: "admin",
     scope: "panel",
     permissions: [
+      "body_assessments.manage",
+      "body_assessments.view",
+      "customer_health_profiles.manage",
+      "customer_health_profiles.view",
       "customers.manage_account",
       "customers.view",
     ],

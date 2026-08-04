@@ -1275,6 +1275,10 @@ test("GET /customers/:id devuelve cuenta segura y capacidades por permiso", { co
     manage_account: false,
     manage_membership: true,
     view_payments: true,
+    view_health_profile: false,
+    manage_health_profile: false,
+    view_body_assessments: false,
+    manage_body_assessments: false,
   });
   assert.equal(response.body.training_profile, undefined);
   assert.equal(response.body.routine, undefined);
@@ -1294,6 +1298,10 @@ test("RBAC de Clientes permite lectura y cuenta a admin sin ampliar otros roles"
 
   assert.equal(adminLogin.status, 200);
   assert.deepEqual(adminLogin.body.authorization.permissions, [
+    "body_assessments.manage",
+    "body_assessments.view",
+    "customer_health_profiles.manage",
+    "customer_health_profiles.view",
     "customers.manage_account",
     "customers.view",
   ]);
@@ -1304,6 +1312,24 @@ test("RBAC de Clientes permite lectura y cuenta a admin sin ampliar otros roles"
   const adminDetail = await adminAgent.get(`/customers/${customer.id}`);
   assert.equal(adminDetail.status, 200);
   assert.equal(adminDetail.body.capabilities.manage_account, true);
+  assert.deepEqual(
+    {
+      view_health_profile:
+        adminDetail.body.capabilities.view_health_profile,
+      manage_health_profile:
+        adminDetail.body.capabilities.manage_health_profile,
+      view_body_assessments:
+        adminDetail.body.capabilities.view_body_assessments,
+      manage_body_assessments:
+        adminDetail.body.capabilities.manage_body_assessments,
+    },
+    {
+      view_health_profile: true,
+      manage_health_profile: true,
+      view_body_assessments: true,
+      manage_body_assessments: true,
+    },
+  );
 
   const updatedEmail = `admin-rbac-${randomUUID()}${testEmailDomain}`;
   const adminPatch = await adminAgent
@@ -1618,15 +1644,17 @@ test("PATCH /customers/:id/account revierte credenciales si falla la revocación
   }
 });
 
-test("GET /customers/:id/history aplica límites, paginación, timezone y omite pagos sin payments.view", { concurrency: false }, async () => {
+test("GET /customers/:id/history pagina y oculta pagos o evaluaciones sin permiso", { concurrency: false }, async () => {
   const employee = await createSyntheticUser({ role: "employee" });
-  const cookie = await loginAndGetCookie(employee.email);
+  const employeeCookie = await loginAndGetCookie(employee.email);
+  const owner = await createSyntheticUser({ role: "owner" });
+  const cookie = await loginAndGetCookie(owner.email);
   const customer = await createCustomerDirect({
     fullName: `${testNamePrefix} HISTORY`,
   });
   const planId = 710000 + Math.floor(Math.random() * 10000);
   const biometric = await queryAsUser<{ biometric_id: number }>(
-    employee.userId,
+    owner.userId,
     "SELECT biometric_id FROM public.profiles WHERE id = $1",
     [customer.id],
   );
@@ -1756,13 +1784,16 @@ test("GET /customers/:id/history aplica límites, paginación, timezone y omite 
     const withoutPayments = await request(app)
       .get(`/customers/${customer.id}/history`)
       .query({ attendance_limit: 5, heatmap_days: 30 })
-      .set("Cookie", cookie);
+      .set("Cookie", employeeCookie);
     assert.equal(withoutPayments.status, 200);
     assert.equal(withoutPayments.body.payments, null);
     assert.equal(withoutPayments.body.kpis.total_spent, null);
     assert.equal(withoutPayments.body.attendance.data.length, 5);
     assert.equal(withoutPayments.body.memberships.meta.total, 2);
-    assert.equal(withoutPayments.body.assessments.meta.total, 3);
+    assert.equal(withoutPayments.body.assessments, null);
+    assert.equal(withoutPayments.body.kpis.initial_weight, null);
+    assert.equal(withoutPayments.body.kpis.current_weight, null);
+    assert.equal(withoutPayments.body.kpis.weight_change, null);
   } finally {
     runAdminSql(`
       INSERT INTO public.role_permissions (role_id, permission_id)
@@ -1853,10 +1884,30 @@ test("0006 es idempotente", { concurrency: false }, () => {
     projectRoot,
     "database/migrations/0006_customers_read_history.sql",
   );
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const latestCustomersMigrationPath = path.join(
+    projectRoot,
+    "database/migrations/0009_customers_health_assessments.sql",
+  );
+
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      execFileSync(
+        "psql",
+        ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-f", migrationPath],
+        { cwd: projectRoot, stdio: "ignore" },
+      );
+    }
+  } finally {
     execFileSync(
       "psql",
-      ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-f", migrationPath],
+      [
+        "-d",
+        "algym_test",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        latestCustomersMigrationPath,
+      ],
       { cwd: projectRoot, stdio: "ignore" },
     );
   }
