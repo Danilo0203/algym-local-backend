@@ -19,6 +19,7 @@ import type {
   CustomerHealthProfile,
   CustomerHealthProfileUpdateInput,
 } from "./customers-health.types.js";
+import type { CustomerIntakeInput } from "./customer-intake.schemas.js";
 
 type AuthorizationRow = {
   permissions: string[] | null;
@@ -424,6 +425,59 @@ function buildAssessmentValues(input: BodyAssessmentWriteInput): {
   }
 
   return { columns, values };
+}
+
+const initialTrainingColumns = [
+  "primary_goal", "secondary_goal", "focus_areas", "experience_level",
+  "days_per_week", "session_minutes", "training_location", "equipment_available",
+  "activity_level", "cardio_preference", "exercise_preferences", "exercise_dislikes",
+  "injuries_or_pain", "restricted_movements", "parq_requires_attention",
+  "medical_clearance_notes",
+] as const;
+
+export async function insertInitialCustomerIntake(
+  client: PoolClient,
+  customerId: string,
+  intake: CustomerIntakeInput,
+): Promise<void> {
+  await client.query(
+    "SELECT set_config('app.new_cash_customer_id', $1, true)",
+    [customerId],
+  );
+
+  if (intake.health_profile) {
+    const columns = healthProfileColumns.filter(
+      (column) => intake.health_profile?.[column] !== undefined,
+    );
+    const placeholders = columns.map((_, index) => `$${index + 2}`);
+    await client.query(
+      `INSERT INTO public.customer_health_profiles (user_id, ${columns.join(", ")})
+       VALUES ($1, ${placeholders.join(", ")})`,
+      [customerId, ...columns.map((column) => intake.health_profile?.[column])],
+    );
+  }
+
+  if (intake.body_assessment) {
+    const { columns, values } = buildAssessmentValues(intake.body_assessment);
+    const placeholders = columns.map((_, index) => `$${index + 2}`);
+    await client.query(
+      `INSERT INTO public.body_assessments (user_id, ${columns.join(", ")})
+       VALUES ($1, ${placeholders.join(", ")})`,
+      [customerId, ...values],
+    );
+  }
+
+  if (intake.training_profile) {
+    const columns = initialTrainingColumns.filter(
+      (column) => intake.training_profile?.[column] !== undefined,
+    );
+    const placeholders = columns.map((_, index) => `$${index + 2}`);
+    await client.query(
+      `INSERT INTO public.training_profiles (user_id, ${columns.join(", ")})
+       VALUES ($1, ${placeholders.join(", ")})`,
+      [customerId, ...columns.map((column) => intake.training_profile?.[column])],
+    );
+  }
 }
 
 export async function getCustomerHealthProfile(

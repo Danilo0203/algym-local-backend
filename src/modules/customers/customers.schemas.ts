@@ -3,6 +3,7 @@ import { z } from "zod";
 import { localPasswordSchema } from "../auth/auth.schemas.js";
 import { createMembershipSchema } from "../memberships/memberships.schemas.js";
 import { paidMembershipForNewCustomerSchema } from "../payments/payments.schemas.js";
+import { customerIntakeSchema } from "./customer-intake.schemas.js";
 
 import type {
   CustomerAccountUpdateInput,
@@ -171,6 +172,7 @@ export const customerCreateSchema = z.object({
   medical_notes: nullableTrimmedTextSchema,
   membership: createMembershipSchema.optional(),
   paid_membership: paidMembershipForNewCustomerSchema.optional(),
+  intake: customerIntakeSchema.optional(),
 }).strict().refine(
   (value) => value.password === undefined || Boolean(value.email?.trim()),
   {
@@ -180,6 +182,9 @@ export const customerCreateSchema = z.object({
 ).refine(
   (value) => !(value.membership && value.paid_membership),
   { message: "Elige una sola forma de crear la membresía", path: ["paid_membership"] },
+).refine(
+  (value) => !value.intake || Boolean(value.paid_membership),
+  { message: "La ficha inicial requiere un alta con cobro en caja", path: ["intake"] },
 ) satisfies z.ZodType<CustomerCreateInput>;
 
 export const customerAccountUpdateSchema = z.object({

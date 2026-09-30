@@ -10,6 +10,7 @@ import request from "supertest";
 
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
+import { withUserTransaction } from "../../db/transaction.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const domain = "@paid-membership.test.local";
@@ -59,6 +60,12 @@ before(() => {
 after(async () => {
   adminSql(`DELETE FROM public.cash_movements
     WHERE customer_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
+    DELETE FROM public.training_profiles
+    WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
+    DELETE FROM public.body_assessments
+    WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
+    DELETE FROM public.customer_health_profiles
+    WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.payments
     WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.subscriptions
@@ -106,6 +113,24 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
     paid_membership: {
       planId, amountOriginal: 125, discountAmount: 5, amountPaid: 120,
       paymentMethod: "cash", requireSession: true,
+    },
+    intake: {
+      health_profile: {
+        parq_requires_attention: true,
+        injuries_or_pain: "Molestia de rodilla",
+        diet_type: "normocalorica",
+      },
+      body_assessment: {
+        weight_kg: 72,
+        height_cm: 170,
+        nutrition_snapshot: { body_type: "mesomorph", diet_type: "normocalorica" },
+      },
+      training_profile: {
+        primary_goal: "strength",
+        focus_areas: ["lower_body"],
+        days_per_week: 3,
+        training_location: "gym",
+      },
     },
   };
   const newCustomerWithoutSession = await request(app).post("/customers")
@@ -160,6 +185,20 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
     WHERE user_id = '${paidCustomer.body.id}' AND status = 'posted'`), "1");
   assert.equal(adminSql(`SELECT count(*) FROM public.cash_movements
     WHERE customer_id = '${paidCustomer.body.id}' AND cash_session_id = '${opened.body.id}'`), "1");
+  assert.equal(adminSql(`SELECT injuries_or_pain FROM public.customer_health_profiles
+    WHERE user_id = '${paidCustomer.body.id}'`), "Molestia de rodilla");
+  assert.equal(adminSql(`SELECT weight_kg FROM public.body_assessments
+    WHERE user_id = '${paidCustomer.body.id}'`), "72.00");
+  assert.equal(adminSql(`SELECT primary_goal FROM public.training_profiles
+    WHERE user_id = '${paidCustomer.body.id}'`), "strength");
+  await assert.rejects(
+    withUserTransaction(employee.id, (client) => client.query(
+      `INSERT INTO public.customer_health_profiles (user_id, injuries_or_pain)
+       VALUES ($1, 'No autorizado')`,
+      [customer.id],
+    )),
+    (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "42501"),
+  );
   const failedEmail = `failed-${randomUUID()}${domain}`;
   const failedPayment = await request(app).post("/customers")
     .set("Cookie", employee.cookie).send({

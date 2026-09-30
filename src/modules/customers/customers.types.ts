@@ -1,5 +1,6 @@
 import type { CreateMembershipInput } from "../memberships/memberships.types.js";
 import type { PaidMembershipInput } from "../payments/payments.schemas.js";
+import type { CustomerIntakeInput } from "./customer-intake.schemas.js";
 import type {
   CustomerBodyAssessment,
   CustomerHealthProfileStatus,
@@ -54,10 +55,11 @@ export type CustomerCreateInput = {
   paid_membership?: Omit<PaidMembershipInput, "customerId" | "operation" | "requireSession"> & {
     requireSession: true;
   };
+  intake?: CustomerIntakeInput;
 };
 
 export type CustomerUpdateInput = Partial<
-  Omit<CustomerCreateInput, "email" | "membership" | "paid_membership" | "password">
+  Omit<CustomerCreateInput, "email" | "membership" | "paid_membership" | "intake" | "password">
 >;
 
 export type CustomerStatusUpdateInput = {

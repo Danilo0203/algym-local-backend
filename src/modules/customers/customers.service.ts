@@ -6,6 +6,7 @@ import { AppError } from "../../errors/app-error.js";
 import { createMembershipForCustomerInTransaction } from "../memberships/memberships.service.js";
 import { createPaidMembershipInTransaction } from "../payments/paid-membership.service.js";
 import { paidMembershipSchema } from "../payments/payments.schemas.js";
+import { insertInitialCustomerIntake } from "./customers-health.service.js";
 import {
   customerAccountUpdateSchema,
   customerCreateSchema,
@@ -830,6 +831,10 @@ export async function createCustomer(
             operation: "create",
           }),
         );
+      }
+
+      if (input.intake) {
+        await insertInitialCustomerIntake(client, customerId, input.intake);
       }
 
       const customer = await getCustomerDetailRow(client, customerId);

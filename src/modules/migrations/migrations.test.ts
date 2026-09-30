@@ -475,7 +475,7 @@ test("0009 habilita RLS, políticas explícitas y ACL local mínima", () => {
       WHERE schemaname = 'public'
         AND tablename = 'customer_health_profiles';
     `),
-    "3",
+    "4",
   );
   assert.equal(
     runAdminQuery(`
@@ -484,7 +484,7 @@ test("0009 habilita RLS, políticas explícitas y ACL local mínima", () => {
       WHERE schemaname = 'public'
         AND tablename = 'body_assessments';
     `),
-    "3",
+    "4",
   );
   assert.equal(
     runAdminQuery(`
