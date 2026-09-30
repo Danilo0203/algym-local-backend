@@ -30,6 +30,13 @@ export const closeCashSessionSchema = z.object({
   adminPassword: z.string().max(1024).optional(),
 }).strict();
 
+export const manualCashMovementSchema = z.object({
+  movementType: z.enum(["manual_income", "withdrawal"]),
+  amount: money.positive(),
+  note: z.string().trim().min(3).max(500),
+}).strict();
+
 export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 export type CloseCashSessionInput = z.infer<typeof closeCashSessionSchema>;
 export type CashHistoryQuery = z.infer<typeof cashHistoryQuerySchema>;
+export type ManualCashMovementInput = z.infer<typeof manualCashMovementSchema>;

@@ -3,8 +3,8 @@ import { Router } from "express";
 
 import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
-import { cashHistoryQuerySchema, cashSessionIdSchema, closeCashSessionSchema, openCashSessionSchema } from "./cash.schemas.js";
-import { closeCashSession, ensureCashRegister, getCashDashboard, getCashHistory, getCashSessionDetail, openCashSession } from "./cash.service.js";
+import { cashHistoryQuerySchema, cashSessionIdSchema, closeCashSessionSchema, manualCashMovementSchema, openCashSessionSchema } from "./cash.schemas.js";
+import { closeCashSession, ensureCashRegister, getCashDashboard, getCashHistory, getCashSessionDetail, openCashSession, recordManualCashMovement } from "./cash.service.js";
 
 export const cashRouter = Router();
 
@@ -43,6 +43,15 @@ cashRouter.get("/sessions/:id", async (request, response, next) => {
     const session = await validateSessionToken(readSessionTokenFromRequest(request));
     const sessionId = cashSessionIdSchema.parse(request.params.id);
     response.status(200).json(await getCashSessionDetail(session.userId, sessionId));
+  } catch (error) { next(error); }
+});
+
+cashRouter.post("/sessions/:id/movements", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const sessionId = cashSessionIdSchema.parse(request.params.id);
+    const input = manualCashMovementSchema.parse(request.body);
+    response.status(201).json(await recordManualCashMovement(session.userId, sessionId, input));
   } catch (error) { next(error); }
 });
 

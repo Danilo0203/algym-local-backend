@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
-import type { CashHistoryQuery, CloseCashSessionInput, OpenCashSessionInput } from "./cash.schemas.js";
+import type { CashHistoryQuery, CloseCashSessionInput, ManualCashMovementInput, OpenCashSessionInput } from "./cash.schemas.js";
 
 type Authorization = { role: string | null; permissions: string[] | null; is_owner: boolean };
 type SessionRow = {
@@ -368,6 +368,24 @@ export async function openCashSession(actorUserId: string, input: OpenCashSessio
         [input.registerId, input.openingAmount, input.notes || null],
       );
       return { id: result.rows[0]!.id };
+    });
+  } catch (error) { cashOperationError(error); }
+}
+
+export async function recordManualCashMovement(
+  actorUserId: string, sessionId: string, input: ManualCashMovementInput,
+) {
+  try {
+    return await withUserTransaction(actorUserId, async (client) => {
+      requireOperator(await authorization(client));
+      const result = await client.query<{ id: string; cash_effect_amount: string }>(
+        `SELECT id, cash_effect_amount::text AS cash_effect_amount
+         FROM public.record_manual_cash_movement(
+           $1::uuid, $2::text, 'other', $3::numeric, 'cash', $4::text, NULL, NULL
+         )`,
+        [sessionId, input.movementType, input.amount, input.note],
+      );
+      return { id: result.rows[0]!.id, cashEffectAmount: Number(result.rows[0]!.cash_effect_amount) };
     });
   } catch (error) { cashOperationError(error); }
 }

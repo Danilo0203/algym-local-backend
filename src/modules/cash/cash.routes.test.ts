@@ -109,13 +109,20 @@ test("caja local permite configurar, abrir, leer y cerrar con autorización", as
     .send({ registerId, openingAmount: 50 });
   assert.equal(duplicate.status, 400);
 
-  await withUserTransaction(employee.id, async (db) => {
-    await db.query(
-      `SELECT public.record_manual_cash_movement(
-        $1::uuid, 'manual_income', 'other', 10::numeric, 'cash', 'Prueba local')`,
-      [sessionId],
-    );
-  });
+  assert.equal((await request(app).post(`/cash/sessions/${sessionId}/movements`)
+    .send({ movementType: "manual_income", amount: 10, note: "Prueba local" })).status, 401);
+  assert.equal((await request(app).post(`/cash/sessions/${sessionId}/movements`)
+    .set("Cookie", employee.cookie)
+    .send({ movementType: "manual_income", amount: 0, note: "Prueba local" })).status, 400);
+  const foreignMovement = await request(app).post(`/cash/sessions/${sessionId}/movements`)
+    .set("Cookie", otherEmployee.cookie)
+    .send({ movementType: "manual_income", amount: 10, note: "Otro cajero" });
+  assert.equal(foreignMovement.status, 400);
+  const manualIncome = await request(app).post(`/cash/sessions/${sessionId}/movements`)
+    .set("Cookie", employee.cookie)
+    .send({ movementType: "manual_income", amount: 10, note: "Prueba local" });
+  assert.equal(manualIncome.status, 201, JSON.stringify(manualIncome.body));
+  assert.equal(manualIncome.body.cashEffectAmount, 10);
 
   const dashboard = await request(app).get("/cash/dashboard").set("Cookie", employee.cookie);
   assert.equal(dashboard.status, 200);
@@ -124,6 +131,11 @@ test("caja local permite configurar, abrir, leer y cerrar con autorización", as
   assert.equal(dashboard.body.canOperateSession, true);
   assert.equal(dashboard.body.sessionMovements[0]?.amount, 10);
   assert.equal(dashboard.body.sessionMovements[0]?.created_by_user_id, employee.id);
+  const withdrawal = await request(app).post(`/cash/sessions/${sessionId}/movements`)
+    .set("Cookie", employee.cookie)
+    .send({ movementType: "withdrawal", amount: 3, note: "Retiro de prueba" });
+  assert.equal(withdrawal.status, 201, JSON.stringify(withdrawal.body));
+  assert.equal(withdrawal.body.cashEffectAmount, -3);
   const otherDashboard = await request(app).get("/cash/dashboard").set("Cookie", otherEmployee.cookie);
   assert.equal(otherDashboard.status, 200);
   assert.equal(otherDashboard.body.currentSession, null);
@@ -157,8 +169,8 @@ test("caja local permite configurar, abrir, leer y cerrar con autorización", as
   const detail = await request(app).get(`/cash/sessions/${sessionId}`)
     .set("Cookie", employee.cookie);
   assert.equal(detail.status, 200);
-  assert.equal(detail.body.summary.expectedAmount, 60);
-  assert.equal(detail.body.movements[0]?.amount, 10);
+  assert.equal(detail.body.summary.expectedAmount, 57);
+  assert.equal(detail.body.movements.length, 2);
   const deniedDetail = await request(app).get(`/cash/sessions/${sessionId}`)
     .set("Cookie", otherEmployee.cookie);
   assert.equal(deniedDetail.status, 404);
@@ -177,7 +189,7 @@ test("caja local permite configurar, abrir, leer y cerrar con autorización", as
     .set("Cookie", employee.cookie).send({ countedAmount: 50, adminPassword: "incorrecta" });
   assert.equal(wrongPassword.status, 403);
   const closed = await request(app).post(`/cash/sessions/${sessionId}/close`)
-    .set("Cookie", employee.cookie).send({ countedAmount: 60, adminPassword: password });
+    .set("Cookie", employee.cookie).send({ countedAmount: 57, adminPassword: password });
   assert.equal(closed.status, 200);
   assert.equal(closed.body.status, "closed");
   const closedBy = adminSql(`SELECT closed_by_user_id FROM public.cash_sessions WHERE id = '${sessionId}'`);
@@ -190,6 +202,10 @@ test("caja local permite configurar, abrir, leer y cerrar con autorización", as
   const closedDetail = await request(app).get(`/cash/sessions/${sessionId}`)
     .set("Cookie", employee.cookie);
   assert.equal(closedDetail.status, 200);
-  assert.equal(closedDetail.body.summary.countedAmount, 60);
+  assert.equal(closedDetail.body.summary.countedAmount, 57);
   assert.equal(closedDetail.body.summary.differenceAmount, 0);
+  const afterCloseMovement = await request(app).post(`/cash/sessions/${sessionId}/movements`)
+    .set("Cookie", employee.cookie)
+    .send({ movementType: "manual_income", amount: 10, note: "Caja cerrada" });
+  assert.equal(afterCloseMovement.status, 400);
 });
