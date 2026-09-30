@@ -24,6 +24,7 @@ import { meRouter } from "./modules/me/me.routes.js";
 import { paymentsRouter } from "./modules/payments/payments.routes.js";
 import { plansRouter } from "./modules/plans/plans.routes.js";
 import { profileRouter } from "./modules/profile/profile.routes.js";
+import { rolesRouter } from "./modules/roles/roles.routes.js";
 import { usersRouter } from "./modules/users/users.routes.js";
 
 export const app = express();
@@ -77,6 +78,7 @@ app.use("/me", meRouter);
 app.use("/payments", paymentsRouter);
 app.use("/plans", plansRouter);
 app.use("/profile", profileRouter);
+app.use("/roles", rolesRouter);
 app.use("/users", usersRouter);
 
 app.use((_request: Request, response: Response) => {
