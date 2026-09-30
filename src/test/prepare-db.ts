@@ -375,3 +375,13 @@ runCommand("psql", [
   "-f",
   path.join(migrationDirectory, "0025_local_product_sale_void.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0026_local_inventory_access.sql"),
+]);
