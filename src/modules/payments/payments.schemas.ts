@@ -22,7 +22,7 @@ const money = z.number().finite().nonnegative().max(99_999_999.99)
   .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-8,
     "El importe admite dos decimales");
 
-export const paidMembershipSchema = z.object({
+const paidMembershipFieldsSchema = z.object({
   customerId: z.string().uuid(),
   planId: z.number().int().positive(),
   operation: z.enum(["create", "renew"]),
@@ -34,8 +34,19 @@ export const paidMembershipSchema = z.object({
   graceDays: z.number().int().min(0).max(365).default(3),
   paymentMethod: z.enum(["cash", "card", "transfer"]).default("cash"),
   requireSession: z.boolean().default(false),
-}).strict().refine((value) => !value.startDate || !value.endDate || value.endDate > value.startDate,
+}).strict();
+
+const validMembershipDates = (value: { startDate?: string; endDate?: string }) =>
+  !value.startDate || !value.endDate || value.endDate > value.startDate;
+
+export const paidMembershipSchema = paidMembershipFieldsSchema.refine(validMembershipDates,
   { message: "La fecha final debe ser posterior al inicio", path: ["endDate"] });
+
+export const paidMembershipForNewCustomerSchema = paidMembershipFieldsSchema
+  .omit({ customerId: true, operation: true })
+  .extend({ requireSession: z.literal(true) })
+  .refine(validMembershipDates,
+    { message: "La fecha final debe ser posterior al inicio", path: ["endDate"] });
 
 export type PaidMembershipInput = z.infer<typeof paidMembershipSchema>;
 

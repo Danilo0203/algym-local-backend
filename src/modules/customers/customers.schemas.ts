@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { localPasswordSchema } from "../auth/auth.schemas.js";
 import { createMembershipSchema } from "../memberships/memberships.schemas.js";
+import { paidMembershipForNewCustomerSchema } from "../payments/payments.schemas.js";
 
 import type {
   CustomerAccountUpdateInput,
@@ -169,12 +170,16 @@ export const customerCreateSchema = z.object({
   injuries: nullableTrimmedTextSchema,
   medical_notes: nullableTrimmedTextSchema,
   membership: createMembershipSchema.optional(),
+  paid_membership: paidMembershipForNewCustomerSchema.optional(),
 }).strict().refine(
   (value) => value.password === undefined || Boolean(value.email?.trim()),
   {
     message: "La contraseña requiere un email",
     path: ["password"],
   },
+).refine(
+  (value) => !(value.membership && value.paid_membership),
+  { message: "Elige una sola forma de crear la membresía", path: ["paid_membership"] },
 ) satisfies z.ZodType<CustomerCreateInput>;
 
 export const customerAccountUpdateSchema = z.object({

@@ -99,6 +99,20 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(adminSql(`SELECT count(*) FROM public.subscriptions WHERE user_id = '${customer.id}'`), "0");
   assert.equal(adminSql(`SELECT count(*) FROM public.payments WHERE user_id = '${customer.id}'`), "0");
 
+  const newCustomerEmail = `paid-${randomUUID()}${domain}`;
+  const paidCustomerInput = {
+    full_name: "ZZTEST PAID NEW CUSTOMER", phone: "55551234",
+    birth_date: "1995-03-05", gender: "female", email: newCustomerEmail,
+    paid_membership: {
+      planId, amountOriginal: 125, discountAmount: 5, amountPaid: 120,
+      paymentMethod: "cash", requireSession: true,
+    },
+  };
+  const newCustomerWithoutSession = await request(app).post("/customers")
+    .set("Cookie", employee.cookie).send(paidCustomerInput);
+  assert.equal(newCustomerWithoutSession.status, 409, JSON.stringify(newCustomerWithoutSession.body));
+  assert.equal(adminSql(`SELECT count(*) FROM auth.users WHERE email = '${newCustomerEmail}'`), "0");
+
   const registerId = adminSql(`INSERT INTO public.cash_registers (name, is_active)
     VALUES ('${registerName}', true) RETURNING id`);
   const opened = await request(app).post("/cash/sessions").set("Cookie", employee.cookie)
@@ -137,6 +151,24 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   const afterRenewal = await request(app).get("/cash/dashboard").set("Cookie", employee.cookie);
   assert.equal(afterRenewal.body.summary.expectedAmount, 170);
   assert.equal(adminSql(`SELECT count(*) FROM public.payments WHERE user_id = '${customer.id}'`), "2");
+
+  const paidCustomer = await request(app).post("/customers")
+    .set("Cookie", employee.cookie).send(paidCustomerInput);
+  assert.equal(paidCustomer.status, 201, JSON.stringify(paidCustomer.body));
+  assert.equal(paidCustomer.body.current_membership.plan_id, planId);
+  assert.equal(adminSql(`SELECT count(*) FROM public.payments
+    WHERE user_id = '${paidCustomer.body.id}' AND status = 'posted'`), "1");
+  assert.equal(adminSql(`SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = '${paidCustomer.body.id}' AND cash_session_id = '${opened.body.id}'`), "1");
+  const failedEmail = `failed-${randomUUID()}${domain}`;
+  const failedPayment = await request(app).post("/customers")
+    .set("Cookie", employee.cookie).send({
+      ...paidCustomerInput,
+      email: failedEmail,
+      paid_membership: { ...paidCustomerInput.paid_membership, amountPaid: 0 },
+    });
+  assert.equal(failedPayment.status, 400, JSON.stringify(failedPayment.body));
+  assert.equal(adminSql(`SELECT count(*) FROM auth.users WHERE email = '${failedEmail}'`), "0");
 
   const ownerView = await request(app).get("/cash/sessions?status=open")
     .set("Cookie", owner.cookie);

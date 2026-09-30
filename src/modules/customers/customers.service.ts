@@ -4,6 +4,8 @@ import type { PoolClient } from "pg";
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
 import { createMembershipForCustomerInTransaction } from "../memberships/memberships.service.js";
+import { createPaidMembershipInTransaction } from "../payments/paid-membership.service.js";
+import { paidMembershipSchema } from "../payments/payments.schemas.js";
 import {
   customerAccountUpdateSchema,
   customerCreateSchema,
@@ -753,7 +755,7 @@ export async function createCustomer(
       : await bcrypt.hash(input.password, 10);
 
     if (
-      input.membership &&
+      (input.membership || input.paid_membership) &&
       !hasPermission(authorization, customersManageMembershipPermission)
     ) {
       throw new AppError(
@@ -815,6 +817,18 @@ export async function createCustomer(
           client,
           customerId,
           input.membership,
+        );
+      }
+
+      if (input.paid_membership) {
+        await createPaidMembershipInTransaction(
+          client,
+          actorUserId,
+          paidMembershipSchema.parse({
+            ...input.paid_membership,
+            customerId,
+            operation: "create",
+          }),
         );
       }
 
