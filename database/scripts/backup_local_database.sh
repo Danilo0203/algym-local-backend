@@ -64,7 +64,7 @@ pg_dump --no-password --host "$db_host" --port "$db_port" --username "$db_user" 
   --dbname "$db_name" --format=custom --file "$tmp_dir/database.dump"
 pg_restore --list "$tmp_dir/database.dump" >/dev/null
 
-tar -C "$media_root" -cf "$tmp_dir/media.tar" .
+COPYFILE_DISABLE=1 tar -C "$media_root" -cf "$tmp_dir/media.tar" .
 media_count="$(find "$media_root" -type f | wc -l | tr -d ' ')"
 tar -tf "$tmp_dir/media.tar" >/dev/null
 
