@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
-import type { CloseCashSessionInput, OpenCashSessionInput } from "./cash.schemas.js";
+import type { CashHistoryQuery, CloseCashSessionInput, OpenCashSessionInput } from "./cash.schemas.js";
 
 type Authorization = { role: string | null; permissions: string[] | null; is_owner: boolean };
 type SessionRow = {
@@ -198,6 +198,126 @@ export async function getCashDashboard(actorUserId: string) {
       supervisedOpenSessions, summary, sessionMovements, outOfSessionMovements,
       activityMovements, canOpenSession: !currentSession,
       canOperateSession: Boolean(currentSession),
+    };
+  });
+}
+
+const historySortColumns = new Set([
+  "session_number", "opened_at", "closed_at", "opening_amount", "difference_amount", "status",
+]);
+
+function historyOrder(sort: string | undefined): string {
+  if (!sort) return "s.opened_at DESC, s.id DESC";
+  const order = sort.split(",").map((part) => {
+    const [column, direction] = part.split(":");
+    if (!column || !historySortColumns.has(column) || !["asc", "desc"].includes(direction ?? "")) {
+      throw new AppError(400, "VALIDATION_ERROR", "Orden del historial inválido");
+    }
+    return `s.${column} ${direction!.toUpperCase()} NULLS LAST`;
+  });
+  return [...order, "s.id DESC"].join(", ");
+}
+
+function historyWhere(input: CashHistoryQuery, actorUserId: string | null, withNumber: boolean,
+  withOpenedBy: boolean) {
+  const values: unknown[] = [];
+  const filters: string[] = [];
+  const add = (fragment: string, value: unknown) => {
+    values.push(value);
+    filters.push(fragment.replace("?", `$${values.length}`));
+  };
+  if (withNumber && input.sessionNumber) {
+    add("s.session_number ILIKE ? ESCAPE '\\'",
+      `%${input.sessionNumber.replace(/[\\%_]/g, "\\$&")}%`);
+  }
+  if (input.status !== "all") add("s.status = ?", input.status);
+  if (input.dateFrom) {
+    add("s.opened_at >= (?::date::timestamp AT TIME ZONE 'America/Guatemala')", input.dateFrom);
+  }
+  if (input.dateTo) {
+    add("s.opened_at < ((?::date + 1)::timestamp AT TIME ZONE 'America/Guatemala')", input.dateTo);
+  }
+  if (actorUserId) add("s.opened_by_user_id = ?::uuid", actorUserId);
+  else if (withOpenedBy && input.openedByUserId) add("s.opened_by_user_id = ?::uuid", input.openedByUserId);
+  return { clause: filters.length ? `WHERE ${filters.join(" AND ")}` : "", values };
+}
+
+export async function getCashHistory(actorUserId: string, input: CashHistoryQuery) {
+  return withUserTransaction(actorUserId, async (client) => {
+    const auth = await authorization(client);
+    requireOperator(auth);
+    const where = historyWhere(input, auth.is_owner ? null : actorUserId, true, true);
+    const count = await client.query<{ total: string }>(
+      `SELECT count(*)::text AS total FROM public.cash_sessions AS s ${where.clause}`,
+      where.values,
+    );
+    const sessions = await client.query<SessionRow>(
+      `SELECT ${sessionColumns} FROM public.cash_sessions AS s
+       JOIN public.cash_registers AS r ON r.id = s.cash_register_id
+       LEFT JOIN public.profiles AS opener ON opener.id = s.opened_by_user_id
+       LEFT JOIN public.profiles AS closer ON closer.id = s.closed_by_user_id
+       ${where.clause}
+       ORDER BY ${historyOrder(input.sort)}
+       LIMIT $${where.values.length + 1} OFFSET $${where.values.length + 2}`,
+      [...where.values, input.perPage, (input.page - 1) * input.perPage],
+    );
+
+    let availableUsers: Array<{ id: string; name: string }> = [];
+    if (auth.is_owner) {
+      const usersWhere = historyWhere(input, null, false, false);
+      const users = await client.query<{ id: string; name: string }>(
+        `SELECT DISTINCT s.opened_by_user_id AS id,
+                COALESCE(p.full_name, 'Usuario') AS name
+         FROM public.cash_sessions AS s
+         LEFT JOIN public.profiles AS p ON p.id = s.opened_by_user_id
+         ${usersWhere.clause}`,
+        usersWhere.values,
+      );
+      availableUsers = users.rows.sort((left, right) => left.name.localeCompare(right.name, "es"));
+    }
+
+    return {
+      access: { role: auth.role, userId: actorUserId },
+      sessions: sessions.rows.map(mapSession), availableUsers,
+      totalItems: Number(count.rows[0]?.total ?? 0),
+      filters: {
+        dateFrom: input.dateFrom || "", dateTo: input.dateTo || "", status: input.status,
+        openedByUserId: auth.is_owner ? input.openedByUserId || "" : actorUserId,
+      },
+    };
+  });
+}
+
+export async function getCashSessionDetail(actorUserId: string, sessionId: string) {
+  return withUserTransaction(actorUserId, async (client) => {
+    const auth = await authorization(client);
+    requireOperator(auth);
+    const sessions = await client.query<SessionRow>(
+      `SELECT ${sessionColumns} FROM public.cash_sessions AS s
+       JOIN public.cash_registers AS r ON r.id = s.cash_register_id
+       LEFT JOIN public.profiles AS opener ON opener.id = s.opened_by_user_id
+       LEFT JOIN public.profiles AS closer ON closer.id = s.closed_by_user_id
+       WHERE s.id = $1`,
+      [sessionId],
+    );
+    const row = sessions.rows[0];
+    if (!row) throw new AppError(404, "CASH_SESSION_NOT_FOUND", "Sesión de caja no encontrada");
+    const session = mapSession(row);
+    const movements = await client.query<MovementRow>(
+      `SELECT ${movementColumns} FROM public.cash_movements AS m
+       ${movementJoins}
+       WHERE m.cash_session_id = $1 ORDER BY m.created_at DESC`,
+      [sessionId],
+    );
+    const mappedMovements = movements.rows.map(mapMovement);
+    const summary = summarize(mappedMovements, session.opening_amount);
+    summary.countedAmount = session.counted_amount;
+    summary.differenceAmount = session.difference_amount;
+    if (session.expected_amount !== null) summary.expectedAmount = session.expected_amount;
+
+    return {
+      access: { role: auth.role, userId: actorUserId },
+      session, summary, movements: mappedMovements,
     };
   });
 }

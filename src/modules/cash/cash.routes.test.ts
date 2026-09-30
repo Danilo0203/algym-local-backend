@@ -133,6 +133,36 @@ test("caja local permite configurar, abrir, leer y cerrar con autorización", as
   assert.equal(ownerDashboard.body.currentSession, null);
   assert.equal(ownerDashboard.body.supervisedOpenSessions[0]?.id, sessionId);
 
+  const ownHistory = await request(app).get("/cash/sessions?status=open&sort=opened_at:desc")
+    .set("Cookie", employee.cookie);
+  assert.equal(ownHistory.status, 200);
+  assert.equal(ownHistory.body.totalItems, 1);
+  assert.equal(ownHistory.body.sessions[0]?.id, sessionId);
+  const otherHistory = await request(app).get("/cash/sessions")
+    .set("Cookie", otherEmployee.cookie);
+  assert.equal(otherHistory.status, 200);
+  assert.equal(otherHistory.body.totalItems, 0);
+  const ownerHistory = await request(app).get("/cash/sessions?status=open")
+    .set("Cookie", owner.cookie);
+  assert.equal(ownerHistory.status, 200);
+  assert.equal(ownerHistory.body.totalItems, 1);
+  assert.equal(ownerHistory.body.availableUsers[0]?.id, employee.id);
+  const futureHistory = await request(app).get("/cash/sessions?dateFrom=2099-01-01")
+    .set("Cookie", owner.cookie);
+  assert.equal(futureHistory.status, 200);
+  assert.equal(futureHistory.body.totalItems, 0);
+  const invalidSort = await request(app).get("/cash/sessions?sort=invalid:asc")
+    .set("Cookie", owner.cookie);
+  assert.equal(invalidSort.status, 400);
+  const detail = await request(app).get(`/cash/sessions/${sessionId}`)
+    .set("Cookie", employee.cookie);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.summary.expectedAmount, 60);
+  assert.equal(detail.body.movements[0]?.amount, 10);
+  const deniedDetail = await request(app).get(`/cash/sessions/${sessionId}`)
+    .set("Cookie", otherEmployee.cookie);
+  assert.equal(deniedDetail.status, 404);
+
   const visibility = await withUserTransaction(employee.id, async (db) =>
     db.query<{ count: string }>("SELECT count(*)::text AS count FROM public.cash_sessions"));
   assert.equal(Number(visibility.rows[0]?.count), 1);
@@ -157,4 +187,9 @@ test("caja local permite configurar, abrir, leer y cerrar con autorización", as
   assert.equal(afterClose.status, 200);
   assert.equal(afterClose.body.currentSession, null);
   assert.equal(afterClose.body.canOpenSession, true);
+  const closedDetail = await request(app).get(`/cash/sessions/${sessionId}`)
+    .set("Cookie", employee.cookie);
+  assert.equal(closedDetail.status, 200);
+  assert.equal(closedDetail.body.summary.countedAmount, 60);
+  assert.equal(closedDetail.body.summary.differenceAmount, 0);
 });
