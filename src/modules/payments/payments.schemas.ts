@@ -38,3 +38,18 @@ export const paidMembershipSchema = z.object({
   { message: "La fecha final debe ser posterior al inicio", path: ["endDate"] });
 
 export type PaidMembershipInput = z.infer<typeof paidMembershipSchema>;
+
+export const paymentIdSchema = z.string().uuid();
+
+export const reversePaymentSchema = z.object({
+  amountOriginal: money,
+  discountAmount: money,
+  amountPaid: money,
+  paymentMethod: z.enum(["cash", "card", "transfer"]),
+  reason: z.string().trim().min(1).max(500),
+  sourceCategory: z.enum(["membership", "product", "enrollment", "service", "other"]).default("membership"),
+  note: z.string().trim().max(500).optional(),
+}).strict().refine((value) => value.discountAmount <= value.amountOriginal,
+  { message: "El descuento supera el importe original", path: ["discountAmount"] });
+
+export type ReversePaymentInput = z.infer<typeof reversePaymentSchema>;

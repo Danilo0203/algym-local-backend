@@ -23,7 +23,7 @@ function adminSql(sql: string): string {
   }).trim();
 }
 
-async function createUser(role: "owner" | "employee" | "client") {
+async function createUser(role: "owner" | "admin" | "employee" | "client") {
   const id = randomUUID();
   const email = `${id}${domain}`;
   const hash = await bcrypt.hash(password, 10);
@@ -45,11 +45,14 @@ async function createUser(role: "owner" | "employee" | "client") {
 
 before(() => {
   adminSql(`INSERT INTO public.permissions (key, description, module, action)
-    VALUES ('cash.operate', 'Prueba de cobro local', 'cash', 'operate')
+    VALUES ('cash.operate', 'Prueba de cobro local', 'cash', 'operate'),
+           ('cash.reverse_payment', 'Prueba de reverso local', 'cash', 'reverse_payment')
     ON CONFLICT (key) DO NOTHING;
     INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles r CROSS JOIN public.permissions p
-    WHERE r.slug = 'employee' AND p.key = 'cash.operate'
+    WHERE (r.slug = 'employee' AND p.key = 'cash.operate')
+       OR (r.slug = 'admin' AND p.key IN
+         ('cash.operate', 'cash.reverse_payment', 'customers.manage_membership'))
     ON CONFLICT (role_id, permission_id) DO NOTHING;`);
 });
 
@@ -147,4 +150,63 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
     });
   assert.equal(ownerPayment.status, 201, JSON.stringify(ownerPayment.body));
   assert.equal(ownerPayment.body.session_link_status, "out_of_session");
+
+  const ownerSession = await request(app).post("/cash/sessions").set("Cookie", owner.cookie)
+    .send({ registerId, openingAmount: 20 });
+  assert.equal(ownerSession.status, 201, JSON.stringify(ownerSession.body));
+  const correctionCustomer = await createUser("client");
+  const original = await request(app).post("/payments/membership")
+    .set("Cookie", owner.cookie).send({
+      customerId: correctionCustomer.id, planId, operation: "create", requireSession: true,
+    });
+  assert.equal(original.status, 201, JSON.stringify(original.body));
+  const paymentId = original.body.payment_id as string;
+
+  assert.equal((await request(app).get(`/payments/${paymentId}/reversal-context`)).status, 401);
+  const context = await request(app).get(`/payments/${paymentId}/reversal-context`)
+    .set("Cookie", owner.cookie);
+  assert.equal(context.status, 200, JSON.stringify(context.body));
+  assert.equal(context.body.amount_original, 125);
+  assert.equal(context.body.status, "posted");
+  const correctionInput = {
+    amountOriginal: 125, discountAmount: 5, amountPaid: 100,
+    paymentMethod: "cash", reason: "Corrección de precio", sourceCategory: "membership",
+    note: "Descuento autorizado",
+  };
+  assert.equal((await request(app).post(`/payments/${paymentId}/reverse`)
+    .set("Cookie", employee.cookie).send(correctionInput)).status, 403);
+  const corrected = await request(app).post(`/payments/${paymentId}/reverse`)
+    .set("Cookie", owner.cookie).send(correctionInput);
+  assert.equal(corrected.status, 201, JSON.stringify(corrected.body));
+  assert.equal(adminSql(`SELECT status FROM public.payments WHERE id = '${paymentId}'`), "reversed");
+  assert.equal(adminSql(`SELECT amount_paid::text FROM public.payments
+    WHERE id = '${corrected.body.replacement_payment_id}'`), "100.00");
+  assert.equal(adminSql(`SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = '${correctionCustomer.id}'`), "3");
+  assert.equal(adminSql(`SELECT cash_effect_amount::text FROM public.cash_movements
+    WHERE id = '${corrected.body.reversal_movement_id}'`), "-125.00");
+  const ownerAfterCorrection = await request(app).get("/cash/dashboard").set("Cookie", owner.cookie);
+  assert.equal(ownerAfterCorrection.status, 200);
+  assert.equal(ownerAfterCorrection.body.summary.expectedAmount, 120);
+  const repeatedCorrection = await request(app).post(`/payments/${paymentId}/reverse`)
+    .set("Cookie", owner.cookie).send(correctionInput);
+  assert.equal(repeatedCorrection.status, 409, JSON.stringify(repeatedCorrection.body));
+  assert.equal(adminSql(`SELECT count(*) FROM public.payments
+    WHERE user_id = '${correctionCustomer.id}'`), "2");
+
+  const admin = await createUser("admin");
+  const adminCustomer = await createUser("client");
+  const adminSession = await request(app).post("/cash/sessions").set("Cookie", admin.cookie)
+    .send({ registerId, openingAmount: 0 });
+  assert.equal(adminSession.status, 201, JSON.stringify(adminSession.body));
+  const adminOriginal = await request(app).post("/payments/membership")
+    .set("Cookie", admin.cookie).send({
+      customerId: adminCustomer.id, planId, operation: "create", requireSession: true,
+    });
+  assert.equal(adminOriginal.status, 201, JSON.stringify(adminOriginal.body));
+  const adminCorrection = await request(app).post(`/payments/${adminOriginal.body.payment_id}/reverse`)
+    .set("Cookie", admin.cookie).send(correctionInput);
+  assert.equal(adminCorrection.status, 201, JSON.stringify(adminCorrection.body));
+  const adminDashboard = await request(app).get("/cash/dashboard").set("Cookie", admin.cookie);
+  assert.equal(adminDashboard.body.summary.expectedAmount, 100);
 });
