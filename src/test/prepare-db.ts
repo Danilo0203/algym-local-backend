@@ -385,3 +385,13 @@ runCommand("psql", [
   "-f",
   path.join(migrationDirectory, "0026_local_inventory_access.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0027_sync_membership_grace.sql"),
+]);
