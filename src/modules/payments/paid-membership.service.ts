@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { updateRenewedCustomerIntake } from "../customers/customers-health.service.js";
 import type { PaidMembershipInput } from "./payments.schemas.js";
 
 type Authorization = { permissions: string[] | null; is_owner: boolean };
@@ -156,8 +157,18 @@ export async function createPaidMembershipInTransaction(
 
 export async function createPaidMembership(actorUserId: string, input: PaidMembershipInput) {
   try {
-    return await withUserTransaction(actorUserId,
-      (client) => createPaidMembershipInTransaction(client, actorUserId, input));
+    return await withUserTransaction(actorUserId, async (client) => {
+      const payment = await createPaidMembershipInTransaction(client, actorUserId, input);
+      if (input.intake) {
+        if (input.operation !== "renew" || !input.requireSession) {
+          throw new AppError(400, "INVALID_RENEWAL_INTAKE", "La ficha requiere una renovación en caja");
+        }
+        await updateRenewedCustomerIntake(
+          client, input.customerId, input.intake, payment.subscription_id,
+        );
+      }
+      return payment;
+    });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "23505") {
       throw new AppError(409, "MEMBERSHIP_ALREADY_ACTIVE", "El cliente ya tiene una membresía activa");

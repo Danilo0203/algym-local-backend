@@ -19,7 +19,7 @@ import type {
   CustomerHealthProfile,
   CustomerHealthProfileUpdateInput,
 } from "./customers-health.types.js";
-import type { CustomerIntakeInput } from "./customer-intake.schemas.js";
+import type { CustomerIntakeInput, CustomerRenewalIntakeInput } from "./customer-intake.schemas.js";
 import { computeInitialNutrition } from "./customer-intake.fitness.js";
 
 type AuthorizationRow = {
@@ -436,25 +436,51 @@ const initialTrainingColumns = [
   "medical_clearance_notes",
 ] as const;
 
-export async function insertInitialCustomerIntake(
+async function saveCashCustomerIntake(
   client: PoolClient,
   customerId: string,
-  intake: CustomerIntakeInput,
-  customer: { birthDate: string; gender: "male" | "female" | "other"; subscriptionId: string },
+  intake: CustomerIntakeInput | CustomerRenewalIntakeInput,
+  customer: {
+    birthDate: string;
+    gender: "male" | "female" | "other";
+    subscriptionId: string;
+    sourceEvent: "signup" | "renewal";
+  },
 ): Promise<void> {
   await client.query(
-    "SELECT set_config('app.new_cash_customer_id', $1, true)",
+    customer.sourceEvent === "signup"
+      ? "SELECT set_config('app.new_cash_customer_id', $1, true)"
+      : "SELECT set_config('app.cash_renew_customer_id', $1, true)",
     [customerId],
   );
+
+  if ("profile_update" in intake && intake.profile_update) {
+    const columns = ["injuries", "medical_notes"] as const;
+    const updatedColumns = columns.filter((column) => intake.profile_update?.[column] !== undefined);
+    const result = await client.query(
+      `UPDATE public.profiles
+       SET ${updatedColumns.map((column, index) => `${column} = $${index + 2}`).join(", ")}
+       WHERE id = $1 AND role = 'client'`,
+      [customerId, ...updatedColumns.map((column) => intake.profile_update?.[column])],
+    );
+    if (result.rowCount !== 1) {
+      throw new AppError(403, "FORBIDDEN", "No autorizado para actualizar el perfil del cliente");
+    }
+  }
 
   if (intake.health_profile) {
     const columns = healthProfileColumns.filter(
       (column) => intake.health_profile?.[column] !== undefined,
     );
     const placeholders = columns.map((_, index) => `$${index + 2}`);
+    const conflictClause = customer.sourceEvent === "renewal"
+      ? `ON CONFLICT (user_id) DO UPDATE
+         SET ${columns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}`
+      : "";
     await client.query(
       `INSERT INTO public.customer_health_profiles (user_id, ${columns.join(", ")})
-       VALUES ($1, ${placeholders.join(", ")})`,
+       VALUES ($1, ${placeholders.join(", ")})
+       ${conflictClause}`,
       [customerId, ...columns.map((column) => intake.health_profile?.[column])],
     );
   }
@@ -488,7 +514,7 @@ export async function insertInitialCustomerIntake(
     if (nutrition) {
       const snapshot = {
         user_id: customerId,
-        source_event: "signup",
+        source_event: customer.sourceEvent,
         subscription_id: customer.subscriptionId,
         gender: nutrition.gender,
         age_years: nutrition.ageYears,
@@ -527,12 +553,56 @@ export async function insertInitialCustomerIntake(
       (column) => intake.training_profile?.[column] !== undefined,
     );
     const placeholders = columns.map((_, index) => `$${index + 2}`);
+    const conflictClause = customer.sourceEvent === "renewal"
+      ? `ON CONFLICT (user_id) DO UPDATE
+         SET ${columns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}`
+      : "";
     await client.query(
       `INSERT INTO public.training_profiles (user_id, ${columns.join(", ")})
-       VALUES ($1, ${placeholders.join(", ")})`,
+       VALUES ($1, ${placeholders.join(", ")})
+       ${conflictClause}`,
       [customerId, ...columns.map((column) => intake.training_profile?.[column])],
     );
   }
+}
+
+export async function insertInitialCustomerIntake(
+  client: PoolClient,
+  customerId: string,
+  intake: CustomerIntakeInput,
+  customer: { birthDate: string; gender: "male" | "female" | "other"; subscriptionId: string },
+): Promise<void> {
+  return saveCashCustomerIntake(client, customerId, intake, {
+    ...customer,
+    sourceEvent: "signup",
+  });
+}
+
+export async function updateRenewedCustomerIntake(
+  client: PoolClient,
+  customerId: string,
+  intake: CustomerRenewalIntakeInput,
+  subscriptionId: string,
+): Promise<void> {
+  const result = await client.query<{
+    birth_date: string;
+    gender: "male" | "female" | "other";
+  }>(
+    `SELECT to_char(birth_date, 'YYYY-MM-DD') AS birth_date,
+            gender::text AS gender
+     FROM public.profiles WHERE id = $1 AND role = 'client'`,
+    [customerId],
+  );
+  const customer = result.rows[0];
+  if (!customer?.birth_date || !customer.gender) {
+    throw new AppError(404, "CUSTOMER_NOT_FOUND", "Cliente no encontrado");
+  }
+  await saveCashCustomerIntake(client, customerId, intake, {
+    birthDate: customer.birth_date,
+    gender: customer.gender,
+    subscriptionId,
+    sourceEvent: "renewal",
+  });
 }
 
 export async function getCustomerHealthProfile(

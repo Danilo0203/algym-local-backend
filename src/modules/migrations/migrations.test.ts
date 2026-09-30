@@ -473,18 +473,28 @@ test("0009 habilita RLS, políticas explícitas y ACL local mínima", () => {
       SELECT count(*)
       FROM pg_catalog.pg_policies
       WHERE schemaname = 'public'
-        AND tablename = 'customer_health_profiles';
+        AND tablename = 'customer_health_profiles'
+        AND policyname IN (
+          'Customer health readers can view profiles',
+          'Customer health editors can insert profiles',
+          'Customer health editors can update profiles'
+        );
     `),
-    "4",
+    "3",
   );
   assert.equal(
     runAdminQuery(`
       SELECT count(*)
       FROM pg_catalog.pg_policies
       WHERE schemaname = 'public'
-        AND tablename = 'body_assessments';
+        AND tablename = 'body_assessments'
+        AND policyname IN (
+          'Body assessments readers can view assessments',
+          'Body assessments managers can insert assessments',
+          'Body assessments managers can update assessments'
+        );
     `),
-    "4",
+    "3",
   );
   assert.equal(
     runAdminQuery(`

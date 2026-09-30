@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { customerRenewalIntakeSchema } from "../customers/customer-intake.schemas.js";
 
 const sortColumns = "(?:payment_date|user_name|subscription_status|plan_name|method|amount_paid)";
 
@@ -39,8 +40,12 @@ const paidMembershipFieldsSchema = z.object({
 const validMembershipDates = (value: { startDate?: string; endDate?: string }) =>
   !value.startDate || !value.endDate || value.endDate > value.startDate;
 
-export const paidMembershipSchema = paidMembershipFieldsSchema.refine(validMembershipDates,
-  { message: "La fecha final debe ser posterior al inicio", path: ["endDate"] });
+export const paidMembershipSchema = paidMembershipFieldsSchema
+  .extend({ intake: customerRenewalIntakeSchema.optional() })
+  .refine(validMembershipDates,
+    { message: "La fecha final debe ser posterior al inicio", path: ["endDate"] })
+  .refine((value) => !value.intake || (value.operation === "renew" && value.requireSession),
+    { message: "La ficha de renovación requiere un cobro en caja", path: ["intake"] });
 
 export const paidMembershipForNewCustomerSchema = paidMembershipFieldsSchema
   .omit({ customerId: true, operation: true })

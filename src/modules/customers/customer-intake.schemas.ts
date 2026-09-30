@@ -52,3 +52,21 @@ export const customerIntakeSchema = z.object({
 });
 
 export type CustomerIntakeInput = z.infer<typeof customerIntakeSchema>;
+
+const renewalProfileUpdateSchema = z.object({
+  injuries: nullableText,
+  medical_notes: nullableText,
+}).strict().refine((value) => Object.keys(value).length > 0, {
+  message: "Incluye al menos un cambio de perfil",
+});
+
+export const customerRenewalIntakeSchema = z.object({
+  profile_update: renewalProfileUpdateSchema.optional(),
+  health_profile: customerHealthProfileUpdateSchema.optional(),
+  body_assessment: bodyAssessmentCreateSchema.optional(),
+  training_profile: initialTrainingProfileSchema.optional(),
+}).strict().refine((value) => Object.values(value).some((item) => item !== undefined), {
+  message: "Incluye al menos un dato para la renovación",
+});
+
+export type CustomerRenewalIntakeInput = z.infer<typeof customerRenewalIntakeSchema>;

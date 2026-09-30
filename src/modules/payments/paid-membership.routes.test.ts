@@ -210,6 +210,44 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
     )),
     (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "42501"),
   );
+  const paidCustomerRenewal = await request(app).post("/payments/membership")
+    .set("Cookie", employee.cookie).send({
+      customerId: paidCustomer.body.id,
+      planId,
+      operation: "renew",
+      amountOriginal: 125,
+      amountPaid: 125,
+      paymentMethod: "card",
+      requireSession: true,
+      intake: {
+        profile_update: { injuries: "Rodilla sensible", medical_notes: "Sin restricción médica" },
+        health_profile: { injuries_or_pain: "Molestia leve de rodilla" },
+        body_assessment: {
+          weight_kg: 71,
+          height_cm: 170,
+          nutrition_snapshot: {
+            body_type: "mesomorph", diet_type: "normocalorica", activity_level: "1_3_dias",
+          },
+        },
+        training_profile: { primary_goal: "general_fitness", days_per_week: 4 },
+      },
+    });
+  assert.equal(paidCustomerRenewal.status, 201, JSON.stringify(paidCustomerRenewal.body));
+  assert.equal(adminSql(`SELECT injuries FROM public.profiles
+    WHERE id = '${paidCustomer.body.id}'`), "Rodilla sensible");
+  assert.equal(adminSql(`SELECT injuries_or_pain FROM public.customer_health_profiles
+    WHERE user_id = '${paidCustomer.body.id}'`), "Molestia leve de rodilla");
+  assert.equal(adminSql(`SELECT primary_goal FROM public.training_profiles
+    WHERE user_id = '${paidCustomer.body.id}'`), "general_fitness");
+  assert.equal(adminSql(`SELECT count(*) FROM public.training_nutrition_snapshots
+    WHERE user_id = '${paidCustomer.body.id}' AND source_event = 'renewal'
+      AND subscription_id = '${paidCustomerRenewal.body.subscription_id}'`), "1");
+  const unauthorizedUpdate = await withUserTransaction(employee.id, (client) => client.query(
+    `UPDATE public.customer_health_profiles
+     SET injuries_or_pain = 'No autorizado' WHERE user_id = $1`,
+    [paidCustomer.body.id],
+  ));
+  assert.equal(unauthorizedUpdate.rowCount, 0);
   const failedEmail = `failed-${randomUUID()}${domain}`;
   const failedPayment = await request(app).post("/customers")
     .set("Cookie", employee.cookie).send({
