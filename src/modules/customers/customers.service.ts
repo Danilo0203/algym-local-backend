@@ -821,8 +821,9 @@ export async function createCustomer(
         );
       }
 
+      let paidSubscriptionId: string | null = null;
       if (input.paid_membership) {
-        await createPaidMembershipInTransaction(
+        const result = await createPaidMembershipInTransaction(
           client,
           actorUserId,
           paidMembershipSchema.parse({
@@ -831,10 +832,18 @@ export async function createCustomer(
             operation: "create",
           }),
         );
+        paidSubscriptionId = result.subscription_id;
       }
 
       if (input.intake) {
-        await insertInitialCustomerIntake(client, customerId, input.intake);
+        if (!paidSubscriptionId) {
+          throw new AppError(500, "CUSTOMER_CREATE_FAILED", "No se pudo vincular la ficha inicial");
+        }
+        await insertInitialCustomerIntake(client, customerId, input.intake, {
+          birthDate: input.birth_date,
+          gender: input.gender,
+          subscriptionId: paidSubscriptionId,
+        });
       }
 
       const customer = await getCustomerDetailRow(client, customerId);

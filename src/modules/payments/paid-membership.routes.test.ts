@@ -60,6 +60,8 @@ before(() => {
 after(async () => {
   adminSql(`DELETE FROM public.cash_movements
     WHERE customer_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
+    DELETE FROM public.training_nutrition_snapshots
+    WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.training_profiles
     WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.body_assessments
@@ -123,7 +125,9 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
       body_assessment: {
         weight_kg: 72,
         height_cm: 170,
-        nutrition_snapshot: { body_type: "mesomorph", diet_type: "normocalorica" },
+        nutrition_snapshot: {
+          body_type: "mesomorph", diet_type: "normocalorica", activity_level: "1_3_dias",
+        },
       },
       training_profile: {
         primary_goal: "strength",
@@ -191,6 +195,13 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
     WHERE user_id = '${paidCustomer.body.id}'`), "72.00");
   assert.equal(adminSql(`SELECT primary_goal FROM public.training_profiles
     WHERE user_id = '${paidCustomer.body.id}'`), "strength");
+  assert.equal(adminSql(`SELECT count(*) FROM public.training_nutrition_snapshots AS snapshot
+    JOIN public.body_assessments AS assessment ON assessment.user_id = snapshot.user_id
+    JOIN public.subscriptions AS subscription ON subscription.id = snapshot.subscription_id
+    WHERE snapshot.user_id = '${paidCustomer.body.id}' AND snapshot.source_event = 'signup'
+      AND snapshot.daily_calories = assessment.daily_calories
+      AND snapshot.protein_grams = assessment.protein_grams
+      AND subscription.plan_id = ${planId}`), "1");
   await assert.rejects(
     withUserTransaction(employee.id, (client) => client.query(
       `INSERT INTO public.customer_health_profiles (user_id, injuries_or_pain)

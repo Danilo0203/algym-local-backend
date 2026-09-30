@@ -20,6 +20,7 @@ import type {
   CustomerHealthProfileUpdateInput,
 } from "./customers-health.types.js";
 import type { CustomerIntakeInput } from "./customer-intake.schemas.js";
+import { computeInitialNutrition } from "./customer-intake.fitness.js";
 
 type AuthorizationRow = {
   permissions: string[] | null;
@@ -439,6 +440,7 @@ export async function insertInitialCustomerIntake(
   client: PoolClient,
   customerId: string,
   intake: CustomerIntakeInput,
+  customer: { birthDate: string; gender: "male" | "female" | "other"; subscriptionId: string },
 ): Promise<void> {
   await client.query(
     "SELECT set_config('app.new_cash_customer_id', $1, true)",
@@ -458,13 +460,66 @@ export async function insertInitialCustomerIntake(
   }
 
   if (intake.body_assessment) {
-    const { columns, values } = buildAssessmentValues(intake.body_assessment);
+    const nutrition = computeInitialNutrition(
+      customer.birthDate, customer.gender, intake.body_assessment,
+    );
+    const assessment = nutrition ? {
+      ...intake.body_assessment,
+      nutrition_snapshot: {
+        ...intake.body_assessment.nutrition_snapshot,
+        body_type: nutrition.bodyType,
+        diet_type: nutrition.dietType,
+        activity_level: nutrition.activityLevel,
+        daily_calories: nutrition.dailyCalories,
+        protein_grams: nutrition.proteinGrams,
+        carbs_grams: nutrition.carbsGrams,
+        fat_grams: nutrition.fatGrams,
+        water_liters_goal: nutrition.waterLitersGoal,
+      },
+    } : intake.body_assessment;
+    const { columns, values } = buildAssessmentValues(assessment);
     const placeholders = columns.map((_, index) => `$${index + 2}`);
     await client.query(
       `INSERT INTO public.body_assessments (user_id, ${columns.join(", ")})
        VALUES ($1, ${placeholders.join(", ")})`,
       [customerId, ...values],
     );
+
+    if (nutrition) {
+      const snapshot = {
+        user_id: customerId,
+        source_event: "signup",
+        subscription_id: customer.subscriptionId,
+        gender: nutrition.gender,
+        age_years: nutrition.ageYears,
+        height_cm: nutrition.heightCm,
+        weight_kg: nutrition.weightKg,
+        body_type: nutrition.bodyType,
+        diet_type: nutrition.dietType,
+        activity_level: nutrition.activityLevel,
+        body_fat_percentage: nutrition.bodyFatPercentage,
+        muscle_mass_kg: nutrition.muscleMassKg,
+        chest_cm: nutrition.chestCm,
+        waist_cm: nutrition.waistCm,
+        arm_right_cm: nutrition.armRightCm,
+        arm_left_cm: nutrition.armLeftCm,
+        hip_cm: nutrition.hipCm,
+        daily_calories: nutrition.dailyCalories,
+        protein_grams: nutrition.proteinGrams,
+        carbs_grams: nutrition.carbsGrams,
+        fat_grams: nutrition.fatGrams,
+        water_liters_goal: nutrition.waterLitersGoal,
+        cardio_minutes: nutrition.cardioMinutes,
+        routine_mode: nutrition.routineMode,
+        algorithm_version: nutrition.algorithmVersion,
+      };
+      const snapshotColumns = Object.keys(snapshot);
+      await client.query(
+        `INSERT INTO public.training_nutrition_snapshots (${snapshotColumns.join(", ")})
+         VALUES (${snapshotColumns.map((_, index) => `$${index + 1}`).join(", ")})`,
+        Object.values(snapshot),
+      );
+    }
   }
 
   if (intake.training_profile) {
