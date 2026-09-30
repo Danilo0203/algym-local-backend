@@ -14,6 +14,7 @@ import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { isAppError } from "./errors/app-error.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
+import { cashRouter } from "./modules/cash/cash.routes.js";
 import { customersRouter } from "./modules/customers/customers.routes.js";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { exercisesRouter } from "./modules/exercises/exercises.routes.js";
@@ -68,6 +69,7 @@ app.use(
 );
 
 app.use("/auth", authRouter);
+app.use("/cash", cashRouter);
 app.use("/customers", customersRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/exercises", exercisesRouter);
