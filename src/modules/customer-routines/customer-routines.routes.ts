@@ -9,6 +9,7 @@ import { customerIdParamSchema } from "../customers/customers.schemas.js";
 import {
   createCustomerRoutineSchema,
   createRoutineDetailSchema,
+  generateCustomerRoutineSchema,
   routineDetailIdParamSchema,
   routineIdParamSchema,
   updateCustomerRoutineSchema,
@@ -18,6 +19,7 @@ import {
   createCustomerRoutine,
   createRoutineDetail,
   deleteRoutineDetail,
+  generateCustomerRoutine,
   updateCustomerRoutine,
   updateRoutineDetail,
 } from "./customer-routines.service.js";
@@ -30,6 +32,17 @@ function parseParams(params: Record<string, string | undefined>) {
     routineId: routineIdParamSchema.parse(params.routineId),
   };
 }
+
+customerRoutinesRouter.post("/generate", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const customerId = customerIdParamSchema.parse((request.params as { id?: string }).id);
+    const input = generateCustomerRoutineSchema.parse(request.body);
+    response.status(201).json(await generateCustomerRoutine(session.userId, customerId, input));
+  } catch (error) {
+    next(error);
+  }
+});
 
 customerRoutinesRouter.post("/", async (request, response, next) => {
   try {

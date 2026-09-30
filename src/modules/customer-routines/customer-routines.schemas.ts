@@ -3,6 +3,7 @@ import { z } from "zod";
 import type {
   CreateCustomerRoutineInput,
   CreateRoutineDetailInput,
+  GenerateCustomerRoutineInput,
   UpdateCustomerRoutineInput,
   UpdateRoutineDetailInput,
 } from "./customer-routines.types.js";
@@ -125,6 +126,29 @@ export const createRoutineDetailSchema = z
     exercise_name_snapshot: detailWriteShape.exercise_name_snapshot.optional(),
   })
   .strict() satisfies z.ZodType<CreateRoutineDetailInput>;
+
+export const generateCustomerRoutineSchema = z.object({
+  status: z.enum(["pending_profile", "draft"]),
+  name: routineWriteShape.name,
+  goal: routineWriteShape.goal,
+  training_profile_id: z.uuid().nullable(),
+  primary_goal: routineWriteShape.primary_goal,
+  secondary_goal: routineWriteShape.secondary_goal,
+  generation_version: z.string().trim().min(1).max(120),
+  details: z.array(createRoutineDetailSchema).max(100),
+}).strict().superRefine((value, context) => {
+  if (value.status === "draft" && (!value.training_profile_id || value.details.length === 0)) {
+    context.addIssue({ code: "custom", message: "El borrador requiere perfil y ejercicios" });
+  }
+  if (value.status === "pending_profile" && value.details.length > 0) {
+    context.addIssue({ code: "custom", message: "Una rutina pendiente no admite ejercicios" });
+  }
+  value.details.forEach((detail, index) => {
+    if (!detail.exercise_id && !detail.exercise_name_snapshot?.trim()) {
+      context.addIssue({ code: "custom", path: ["details", index], message: "Indica el nombre del ejercicio pendiente" });
+    }
+  });
+}) satisfies z.ZodType<GenerateCustomerRoutineInput>;
 
 export const updateRoutineDetailSchema = z
   .object(detailWriteShape)

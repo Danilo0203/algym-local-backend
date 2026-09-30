@@ -526,6 +526,85 @@ test("activar una rutina archiva la anterior y una validación fallida no deja c
   );
 });
 
+test("generación local guarda borrador y detalles en una transacción", async () => {
+  const customer = await createUser("client");
+  const trainingProfileId = runAdminQuery(`
+    INSERT INTO public.training_profiles (
+      user_id, primary_goal, focus_areas, experience_level, days_per_week,
+      session_minutes, training_location, equipment_available, activity_level,
+      cardio_preference, restricted_movements, parq_requires_attention, is_complete
+    ) VALUES (
+      '${customer.userId}', 'strength', ARRAY['upper_body'], 'intermediate', 3,
+      60, 'gym', ARRAY['full_gym'], '3_5_dias', 'moderate', ARRAY[]::text[], false, true
+    ) RETURNING id;
+  `);
+  const previousDraftId = runAdminQuery(`
+    INSERT INTO public.routines (user_id, created_by, name, status, source, is_active)
+    VALUES ('${customer.userId}', '${authorizedEmployee.userId}', 'Borrador anterior', 'draft', 'system', false)
+    RETURNING id;
+  `);
+  const body = {
+    status: "draft",
+    name: "Propuesta strength",
+    goal: "strength",
+    training_profile_id: trainingProfileId,
+    primary_goal: "strength",
+    secondary_goal: null,
+    generation_version: "routine_engine_v1",
+    details: [
+      { day_of_week: 1, exercise_id: null, exercise_order: 1, block_type: "warmup", exercise_name_snapshot: "Calentamiento local" },
+      { day_of_week: 1, exercise_id: null, exercise_order: 2, block_type: "strength", sets: 3, reps: "10", exercise_name_snapshot: "Sentadilla local" },
+    ],
+  };
+
+  const noSession = await request(app)
+    .post(`/customers/${customer.userId}/routines/generate`)
+    .send(body);
+  assert.equal(noSession.status, 401);
+  const forbidden = await request(app)
+    .post(`/customers/${customer.userId}/routines/generate`)
+    .set("Cookie", unauthorizedCookie)
+    .send(body);
+  assert.equal(forbidden.status, 403);
+
+  runAdminSql(`UPDATE public.training_profiles SET is_complete = false WHERE id = '${trainingProfileId}';`);
+  const incomplete = await request(app)
+    .post(`/customers/${customer.userId}/routines/generate`)
+    .set("Cookie", authorizedCookie)
+    .send(body);
+  assert.equal(incomplete.status, 409);
+  assert.equal(incomplete.body.error.code, "TRAINING_PROFILE_INCOMPLETE");
+  runAdminSql(`UPDATE public.training_profiles SET is_complete = true WHERE id = '${trainingProfileId}';`);
+
+  const invalid = await request(app)
+    .post(`/customers/${customer.userId}/routines/generate`)
+    .set("Cookie", authorizedCookie)
+    .send({ ...body, details: [{ ...body.details[0], exercise_id: 999999999 }] });
+  assert.equal(invalid.status, 404);
+  assert.equal(invalid.body.error.code, "EXERCISE_NOT_FOUND");
+  assert.equal(runAdminQuery(`SELECT status FROM public.routines WHERE id = '${previousDraftId}';`), "draft");
+  assert.equal(runAdminQuery(`SELECT count(*) FROM public.routines WHERE user_id = '${customer.userId}';`), "1");
+
+  const generated = await request(app)
+    .post(`/customers/${customer.userId}/routines/generate`)
+    .set("Cookie", authorizedCookie)
+    .send(body);
+  assert.equal(generated.status, 201);
+  assert.equal(generated.body.customer_id, customer.userId);
+  assert.equal(generated.body.routine.status, "draft");
+  assert.equal(generated.body.routine.source, "system");
+  assert.equal(runAdminQuery(`SELECT status FROM public.routines WHERE id = '${previousDraftId}';`), "archived");
+  assert.equal(runAdminQuery(`SELECT count(*) FROM public.routine_details WHERE routine_id = '${generated.body.routine.id}';`), "2");
+
+  const pendingCustomer = await createUser("client");
+  const pending = await request(app)
+    .post(`/customers/${pendingCustomer.userId}/routines/generate`)
+    .set("Cookie", authorizedCookie)
+    .send({ ...body, status: "pending_profile", training_profile_id: null, details: [] });
+  assert.equal(pending.status, 201);
+  assert.equal(pending.body.routine.status, "pending_profile");
+});
+
 test("RLS permite al staff autorizado crear y modificar datos de Rutinas, pero no borrar routines", async () => {
   const employee = await createUser("employee");
   const customer = await createUser("client");

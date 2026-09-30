@@ -5,6 +5,7 @@ import { AppError } from "../../errors/app-error.js";
 import type {
   CreateCustomerRoutineInput,
   CreateRoutineDetailInput,
+  GenerateCustomerRoutineInput,
   CustomerRoutineMutationResponse,
   CustomerRoutineWorkspaceResponse,
   RoutineDetailRecord,
@@ -527,6 +528,83 @@ export async function createCustomerRoutine(
     );
     const row = result.rows[0];
     if (!row) throw new Error("Routine insert did not return a row");
+
+    return { customer_id: customerId, routine: mapRoutineRow(row) };
+  });
+}
+
+export async function generateCustomerRoutine(
+  actorUserId: string,
+  customerId: string,
+  input: GenerateCustomerRoutineInput,
+): Promise<CustomerRoutineMutationResponse> {
+  return withUserTransaction(actorUserId, async (client) => {
+    await assertAccess(client);
+    await assertCustomerExists(client, customerId);
+    await lockCustomerRoutines(client, customerId);
+    await assertTrainingProfileBelongsToCustomer(client, customerId, input.training_profile_id);
+
+    if (input.status === "draft") {
+      const profile = await client.query<{ is_complete: boolean }>(
+        `SELECT is_complete FROM public.training_profiles
+         WHERE id = $1 AND user_id = $2 FOR SHARE`,
+        [input.training_profile_id, customerId],
+      );
+      if (!profile.rows[0]?.is_complete) {
+        throw new AppError(409, "TRAINING_PROFILE_INCOMPLETE", "Completa el perfil antes de generar la rutina");
+      }
+    }
+
+    await client.query(
+      `UPDATE public.routines SET status = 'archived', is_active = false
+       WHERE user_id = $1
+         AND (status = 'pending_profile' OR ($2 = 'draft' AND status = 'draft'))`,
+      [customerId, input.status],
+    );
+
+    const inserted = await client.query<RoutineRow>(
+      `INSERT INTO public.routines (
+         user_id, created_by, name, start_date, end_date, is_active,
+         goal, status, source, training_profile_id, primary_goal,
+         secondary_goal, generation_version
+       ) VALUES (
+         $1, $2, $3, CURRENT_DATE, NULL, false,
+         $4, $5, 'system', $6, $7, $8, $9
+       ) RETURNING
+         id, user_id, created_by, name,
+         to_char(start_date, 'YYYY-MM-DD') AS start_date,
+         to_char(end_date, 'YYYY-MM-DD') AS end_date,
+         is_active, goal, status, source, training_profile_id,
+         primary_goal, secondary_goal, generation_version,
+         reviewed_by, reviewed_at`,
+      [
+        customerId, actorUserId, input.name, input.goal, input.status,
+        input.training_profile_id, input.primary_goal, input.secondary_goal,
+        input.generation_version,
+      ],
+    );
+    const row = inserted.rows[0];
+    if (!row) throw new Error("Generated routine insert did not return a row");
+
+    for (const detail of input.details) {
+      const snapshot = detail.exercise_id
+        ? await resolveExerciseSnapshot(client, detail.exercise_id)
+        : detail.exercise_name_snapshot?.trim() ?? null;
+      await client.query(
+        `INSERT INTO public.routine_details (
+           routine_id, day_of_week, exercise_id, exercise_order, block_type,
+           sets, reps, rest_seconds, duration_minutes, target_rir, notes,
+           exercise_name_snapshot
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          row.id, detail.day_of_week, detail.exercise_id ?? null,
+          detail.exercise_order ?? null, detail.block_type ?? "strength",
+          detail.sets ?? null, detail.reps ?? null, detail.rest_seconds ?? null,
+          detail.duration_minutes ?? null, detail.target_rir ?? null,
+          detail.notes ?? null, snapshot,
+        ],
+      );
+    }
 
     return { customer_id: customerId, routine: mapRoutineRow(row) };
   });

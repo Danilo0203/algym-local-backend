@@ -97,6 +97,17 @@ export type CreateCustomerRoutineInput = {
   generation_version?: string | null;
 };
 
+export type GenerateCustomerRoutineInput = {
+  status: "pending_profile" | "draft";
+  name: string;
+  goal: string | null;
+  training_profile_id: string | null;
+  primary_goal: string | null;
+  secondary_goal: string | null;
+  generation_version: string;
+  details: CreateRoutineDetailInput[];
+};
+
 export type UpdateCustomerRoutineInput = Partial<CreateCustomerRoutineInput>;
 
 export type CreateRoutineDetailInput = {
