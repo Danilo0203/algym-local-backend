@@ -105,6 +105,9 @@ function mapRoutineRow(row: RoutineRow): RoutineRecord {
 }
 
 function mapRoutineDetailRow(row: RoutineDetailRow): RoutineDetailRecord {
+  const localImageUrl = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(row.exercise_image_url ?? "")
+    ? row.exercise_image_url
+    : null;
   return {
     id: Number(row.id),
     routine_id: row.routine_id,
@@ -123,8 +126,8 @@ function mapRoutineDetailRow(row: RoutineDetailRow): RoutineDetailRecord {
       row.exercise_display_name ??
       row.exercise_name ??
       row.exercise_name_snapshot,
-    exercise_image_url: row.exercise_image_url,
-    exercise_video_url: row.exercise_video_url,
+    exercise_image_url: localImageUrl,
+    exercise_video_url: null,
   };
 }
 
@@ -159,12 +162,13 @@ function getMissingRequirements(
   return missing;
 }
 
-export async function getCustomerRoutineWorkspace(
+async function loadRoutineWorkspace(
   actorUserId: string,
   customerId: string,
+  allowOwnPortal: boolean,
 ): Promise<CustomerRoutineWorkspaceResponse> {
   return withUserTransaction(actorUserId, async (client) => {
-    await assertAccess(client);
+    if (!allowOwnPortal || actorUserId !== customerId) await assertAccess(client);
 
     const customerResult = await client.query<CustomerNutritionRow>(
       `
@@ -284,6 +288,14 @@ export async function getCustomerRoutineWorkspace(
       pendingDetails: pendingRoutine ? detailsByRoutine.get(pendingRoutine.id) ?? [] : [],
     };
   });
+}
+
+export async function getCustomerRoutineWorkspace(actorUserId: string, customerId: string) {
+  return loadRoutineWorkspace(actorUserId, customerId, false);
+}
+
+export async function getOwnRoutineWorkspace(actorUserId: string) {
+  return loadRoutineWorkspace(actorUserId, actorUserId, true);
 }
 
 async function assertCustomerExists(
