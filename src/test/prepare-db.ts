@@ -245,3 +245,23 @@ runCommand("psql", [
   "-f",
   path.join(migrationDirectory, "0012_plans_local_writes.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0013_exercises_local_writes.sql"),
+]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0014_exercise_editor_routine_visibility.sql"),
+]);

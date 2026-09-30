@@ -16,6 +16,7 @@ import { isAppError } from "./errors/app-error.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { customersRouter } from "./modules/customers/customers.routes.js";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
+import { exercisesRouter } from "./modules/exercises/exercises.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { mediaRouter } from "./modules/media/media.routes.js";
 import { paymentsRouter } from "./modules/payments/payments.routes.js";
@@ -65,6 +66,7 @@ app.use(
 app.use("/auth", authRouter);
 app.use("/customers", customersRouter);
 app.use("/dashboard", dashboardRouter);
+app.use("/exercises", exercisesRouter);
 app.use("/health", healthRouter);
 app.use("/media", mediaRouter);
 app.use("/payments", paymentsRouter);
