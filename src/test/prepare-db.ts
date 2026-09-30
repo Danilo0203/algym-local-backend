@@ -54,6 +54,7 @@ const syntheticAuthorizationSeedSql = `
   VALUES
     ('customers.create', 'Permiso sintético customers.create', 'customers', 'create'),
     ('customers.manage_membership', 'Permiso sintético customers.manage_membership', 'customers', 'manage_membership'),
+    ('customers.manage_routine', 'Permiso sintético customers.manage_routine', 'customers', 'manage_routine'),
     ('customers.update', 'Permiso sintético customers.update', 'customers', 'update'),
     ('customers.view', 'Permiso sintético customers.view', 'customers', 'view'),
     ('dashboard.view', 'Permiso sintético dashboard.view', 'dashboard', 'view'),
@@ -73,7 +74,7 @@ const syntheticAuthorizationSeedSql = `
   FROM public.roles AS r
   JOIN public.permissions AS p
     ON (
-      (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.manage_membership', 'customers.update', 'customers.view', 'dashboard.view', 'payments.view', 'plans.view', 'profile.view', 'profile.update'))
+      (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.manage_membership', 'customers.manage_routine', 'customers.update', 'customers.view', 'dashboard.view', 'payments.view', 'plans.view', 'profile.view', 'profile.update'))
       OR (r.slug = 'owner' AND p.key IN ('dashboard.view', 'roles.view', 'users.view'))
     )
   ON CONFLICT (role_id, permission_id) DO NOTHING;
@@ -204,5 +205,18 @@ runCommand("psql", [
   path.join(
     migrationDirectory,
     "0010_rbac_hardening.sql",
+  ),
+]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(
+    migrationDirectory,
+    "0011_customer_routines.sql",
   ),
 ]);

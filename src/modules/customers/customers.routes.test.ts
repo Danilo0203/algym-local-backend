@@ -665,6 +665,7 @@ test("POST /customers crea núcleo y membresía en una sola transacción", { con
   const employee = await createSyntheticUser({ role: "employee" });
   const cookie = await loginAndGetCookie(employee.email);
   const planId = 900000 + Math.floor(Math.random() * 90000);
+  const membershipYear = new Date().getUTCFullYear() + 1;
 
   runAdminSql(`
     INSERT INTO public.plans (id, name, price, duration_days, is_active)
@@ -679,15 +680,15 @@ test("POST /customers crea núcleo y membresía en una sola transacción", { con
       membership: {
         plan_id: planId,
         cycles: 2,
-        start_date: "2026-07-21",
+        start_date: `${membershipYear}-07-21`,
       },
     }));
 
   assert.equal(response.status, 201);
   assert.equal(response.body.current_membership.plan_name, `${testNamePrefix} Plan atómico`);
   assert.equal(response.body.current_membership.status, "active");
-  assert.equal(response.body.current_membership.start_date, "2026-07-21");
-  assert.equal(response.body.current_membership.end_date, "2026-09-19");
+  assert.equal(response.body.current_membership.start_date, `${membershipYear}-07-21`);
+  assert.equal(response.body.current_membership.end_date, `${membershipYear}-09-19`);
   assert.equal(response.body.current_membership.grace_days, 3);
   assert.equal(response.body.account.has_password, true);
   assertNoSensitiveFields(response.body);

@@ -263,6 +263,7 @@ test("renew exige una membresía previa", async () => {
 });
 
 test("renew reemplaza la activa transaccionalmente y conserva una sola activa", async () => {
+  const membershipYear = new Date().getUTCFullYear() + 1;
   const employee = await createUser({ role: "employee" });
   const customer = await createUser();
   const planId = await createPlan();
@@ -270,7 +271,7 @@ test("renew reemplaza la activa transaccionalmente y conserva una sola activa", 
   const created = await request(app)
     .post(`/customers/${customer.userId}/membership`)
     .set("Cookie", cookie)
-    .send({ plan_id: planId, cycles: 1, start_date: "2026-08-01" });
+    .send({ plan_id: planId, cycles: 1, start_date: `${membershipYear}-08-01` });
   assert.equal(created.status, 201);
 
   const renewed = await request(app)
@@ -279,7 +280,7 @@ test("renew reemplaza la activa transaccionalmente y conserva una sola activa", 
     .send({ plan_id: planId, cycles: 2 });
   assert.equal(renewed.status, 201);
   assert.equal(renewed.body.previous_membership_id, created.body.membership.id);
-  assert.equal(renewed.body.membership.start_date, "2026-09-01");
+  assert.equal(renewed.body.membership.start_date, `${membershipYear}-09-01`);
   assert.equal(renewed.body.membership.cycles, 2);
 
   const statuses = runAdminQuery(
