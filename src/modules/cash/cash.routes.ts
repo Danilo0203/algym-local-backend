@@ -3,8 +3,9 @@ import { Router } from "express";
 
 import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
-import { cashHistoryQuerySchema, cashSessionIdSchema, closeCashSessionSchema, manualCashMovementSchema, openCashSessionSchema } from "./cash.schemas.js";
+import { cashHistoryQuerySchema, cashProductSaleSchema, cashProductSaleVoidSchema, cashProductSearchSchema, cashSessionIdSchema, closeCashSessionSchema, manualCashMovementSchema, openCashSessionSchema } from "./cash.schemas.js";
 import { closeCashSession, ensureCashRegister, getCashDashboard, getCashHistory, getCashSessionDetail, openCashSession, recordManualCashMovement } from "./cash.service.js";
+import { searchCashProducts, sellCashProducts, voidCashProductSale } from "./cash-product-sales.service.js";
 
 export const cashRouter = Router();
 
@@ -52,6 +53,31 @@ cashRouter.post("/sessions/:id/movements", async (request, response, next) => {
     const sessionId = cashSessionIdSchema.parse(request.params.id);
     const input = manualCashMovementSchema.parse(request.body);
     response.status(201).json(await recordManualCashMovement(session.userId, sessionId, input));
+  } catch (error) { next(error); }
+});
+
+cashRouter.get("/products/search", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const input = cashProductSearchSchema.parse(request.query);
+    response.status(200).json(await searchCashProducts(session.userId, input.search));
+  } catch (error) { next(error); }
+});
+
+cashRouter.post("/products/sales", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const input = cashProductSaleSchema.parse(request.body);
+    response.status(201).json(await sellCashProducts(session.userId, input));
+  } catch (error) { next(error); }
+});
+
+cashRouter.post("/products/sales/:id/void", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const saleId = cashSessionIdSchema.parse(request.params.id);
+    const input = cashProductSaleVoidSchema.parse(request.body);
+    response.status(201).json(await voidCashProductSale(session.userId, saleId, input));
   } catch (error) { next(error); }
 });
 

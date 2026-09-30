@@ -36,7 +36,29 @@ export const manualCashMovementSchema = z.object({
   note: z.string().trim().min(3).max(500),
 }).strict();
 
+export const cashProductSearchSchema = z.object({
+  search: z.string().trim().max(120).default(""),
+}).strict();
+
+export const cashProductSaleSchema = z.object({
+  items: z.array(z.object({
+    productId: z.uuid(),
+    quantity: z.number().positive().max(999_999).refine(
+      (value) => Math.abs(Math.round(value * 1_000) - value * 1_000) < 1e-7,
+      "La cantidad admite hasta tres decimales",
+    ),
+  }).strict()).min(1).max(50),
+  paymentMethod: z.enum(["cash", "card", "transfer"]),
+  note: z.string().trim().max(500).nullable().optional(),
+}).strict();
+
+export const cashProductSaleVoidSchema = z.object({
+  note: z.string().trim().max(500).nullable().optional(),
+}).strict();
+
 export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 export type CloseCashSessionInput = z.infer<typeof closeCashSessionSchema>;
 export type CashHistoryQuery = z.infer<typeof cashHistoryQuerySchema>;
 export type ManualCashMovementInput = z.infer<typeof manualCashMovementSchema>;
+export type CashProductSaleInput = z.infer<typeof cashProductSaleSchema>;
+export type CashProductSaleVoidInput = z.infer<typeof cashProductSaleVoidSchema>;
