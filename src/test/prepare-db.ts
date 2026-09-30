@@ -295,3 +295,13 @@ runCommand("psql", [
   "-f",
   path.join(migrationDirectory, "0017_sync_local_role.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0018_internal_users_local.sql"),
+]);

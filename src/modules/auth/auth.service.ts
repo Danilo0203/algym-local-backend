@@ -188,6 +188,7 @@ async function findUserByEmail(
         deleted_at
       FROM auth.users
       WHERE lower(email) = $1
+        AND deleted_at IS NULL
       LIMIT 1
     `,
     [normalizeEmail(email)],
