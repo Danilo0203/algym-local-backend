@@ -17,6 +17,7 @@ import { authRouter } from "./modules/auth/auth.routes.js";
 import { customersRouter } from "./modules/customers/customers.routes.js";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
+import { mediaRouter } from "./modules/media/media.routes.js";
 import { paymentsRouter } from "./modules/payments/payments.routes.js";
 import { plansRouter } from "./modules/plans/plans.routes.js";
 import { profileRouter } from "./modules/profile/profile.routes.js";
@@ -65,6 +66,7 @@ app.use("/auth", authRouter);
 app.use("/customers", customersRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/health", healthRouter);
+app.use("/media", mediaRouter);
 app.use("/payments", paymentsRouter);
 app.use("/plans", plansRouter);
 app.use("/profile", profileRouter);
@@ -82,6 +84,13 @@ app.use(
     response: Response,
     _next: NextFunction,
   ) => {
+    if (error && typeof error === "object" && "type" in error && error.type === "entity.too.large") {
+      response.status(413).json({
+        error: { code: "PAYLOAD_TOO_LARGE", message: "Archivo o solicitud demasiado grande" },
+      });
+      return;
+    }
+
     if (error instanceof ZodError) {
       response.status(400).json({
         error: {
