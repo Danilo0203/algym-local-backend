@@ -34,7 +34,7 @@ function runAdminQuery(sql: string): string {
   ).trim();
 }
 
-async function createUser(role: "client" | "employee") {
+async function createUser(role: "client" | "employee" | "admin") {
   const userId = randomUUID();
   const email = `${userId}${testEmailDomain}`;
   const hash = await bcrypt.hash(testPassword, 10);
@@ -140,4 +140,68 @@ test("GET /plans/:id valida id y devuelve 404", async () => {
     .set("Cookie", cookie);
   assert.equal(missingResponse.status, 404);
   assert.equal(missingResponse.body.error.code, "PLAN_NOT_FOUND");
+});
+
+test("POST /plans impide escrituras sin sesión o permiso", async () => {
+  const payload = { name: "ZZTEST API PLAN SIN PERMISO", price: 100, duration_days: 30 };
+  const anonymous = await request(app).post("/plans").send(payload);
+  assert.equal(anonymous.status, 401);
+
+  const employee = await createUser("employee");
+  const cookie = await login(employee.email);
+  const denied = await request(app).post("/plans").set("Cookie", cookie).send(payload);
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.error.code, "FORBIDDEN");
+});
+
+test("administrador crea, edita y desactiva un plan sin perder historial", async () => {
+  const admin = await createUser("admin");
+  const cookie = await login(admin.email);
+  const name = `ZZTEST API PLAN ${randomUUID()}`;
+
+  const created = await request(app).post("/plans").set("Cookie", cookie).send({
+    name,
+    description: "Inicial",
+    price: 150.5,
+    duration_days: 30,
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.body.name, name);
+  assert.equal(created.body.price, 150.5);
+  assert.equal(created.body.is_active, true);
+  const planId = Number(created.body.id);
+
+  const updated = await request(app).put(`/plans/${planId}`).set("Cookie", cookie).send({
+    description: null,
+    price: 175,
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.description, null);
+  assert.equal(updated.body.price, 175);
+  assert.equal(updated.body.duration_days, 30);
+
+  const deactivated = await request(app).delete(`/plans/${planId}`).set("Cookie", cookie);
+  assert.equal(deactivated.status, 200);
+  assert.equal(deactivated.body.is_active, false);
+
+  const historical = await request(app).get(`/plans/${planId}`).set("Cookie", cookie);
+  assert.equal(historical.status, 200);
+  assert.equal(historical.body.is_active, false);
+});
+
+test("escrituras de planes validan payload e identificador", async () => {
+  const admin = await createUser("admin");
+  const cookie = await login(admin.email);
+  const invalidCreate = await request(app).post("/plans").set("Cookie", cookie).send({
+    name: "X",
+    price: -1,
+    duration_days: 0,
+  });
+  assert.equal(invalidCreate.status, 400);
+
+  const emptyUpdate = await request(app).put("/plans/1").set("Cookie", cookie).send({});
+  assert.equal(emptyUpdate.status, 400);
+
+  const invalidId = await request(app).delete("/plans/not-a-number").set("Cookie", cookie);
+  assert.equal(invalidId.status, 400);
 });

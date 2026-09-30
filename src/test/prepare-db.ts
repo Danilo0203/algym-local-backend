@@ -23,6 +23,10 @@ const dbPassword = process.env.TEST_DB_ADMIN_PASSWORD ?? "";
 const dbOwner =
   process.env.TEST_DB_OWNER?.trim() || "algym_migrator";
 
+if (!["127.0.0.1", "localhost", "::1"].includes(dbHost)) {
+  throw new Error("Las pruebas destructivas solo pueden apuntar a PostgreSQL local.");
+}
+
 const environment = {
   ...process.env,
   ...(dbPassword ? { PGPASSWORD: dbPassword } : {}),
@@ -219,4 +223,14 @@ runCommand("psql", [
     migrationDirectory,
     "0011_customer_routines.sql",
   ),
+]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0012_plans_local_writes.sql"),
 ]);
