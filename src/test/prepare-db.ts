@@ -275,3 +275,13 @@ runCommand("psql", [
   "-f",
   path.join(migrationDirectory, "0015_client_portal_plan_history.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0016_message_templates_local.sql"),
+]);
