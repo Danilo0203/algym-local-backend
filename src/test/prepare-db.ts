@@ -315,3 +315,13 @@ runCommand("psql", [
   "-f",
   path.join(migrationDirectory, "0019_cash_local_access.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d",
+  targetDatabaseName,
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-f",
+  path.join(migrationDirectory, "0020_membership_payments_local.sql"),
+]);

@@ -17,3 +17,24 @@ export const paymentsListQuerySchema = z.object({
 );
 
 export type PaymentsListQuery = z.infer<typeof paymentsListQuerySchema>;
+
+const money = z.number().finite().nonnegative().max(99_999_999.99)
+  .refine((value) => Math.abs(Math.round(value * 100) - value * 100) < 1e-8,
+    "El importe admite dos decimales");
+
+export const paidMembershipSchema = z.object({
+  customerId: z.string().uuid(),
+  planId: z.number().int().positive(),
+  operation: z.enum(["create", "renew"]),
+  startDate: z.iso.date().optional(),
+  endDate: z.iso.date().optional(),
+  amountOriginal: money.optional(),
+  discountAmount: money.default(0),
+  amountPaid: money.optional(),
+  graceDays: z.number().int().min(0).max(365).default(3),
+  paymentMethod: z.enum(["cash", "card", "transfer"]).default("cash"),
+  requireSession: z.boolean().default(false),
+}).strict().refine((value) => !value.startDate || !value.endDate || value.endDate > value.startDate,
+  { message: "La fecha final debe ser posterior al inicio", path: ["endDate"] });
+
+export type PaidMembershipInput = z.infer<typeof paidMembershipSchema>;
