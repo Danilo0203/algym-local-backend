@@ -27,10 +27,20 @@ if (!["127.0.0.1", "localhost", "::1"].includes(dbHost)) {
   throw new Error("Las pruebas destructivas solo pueden apuntar a PostgreSQL local.");
 }
 
-const environment = {
+for (const inheritedHost of [process.env.PGHOST, process.env.PGHOSTADDR]) {
+  if (inheritedHost && !["127.0.0.1", "localhost", "::1"].includes(inheritedHost)) {
+    throw new Error("PGHOST/PGHOSTADDR no puede dirigir pruebas a PostgreSQL remoto.");
+  }
+}
+
+const environment: NodeJS.ProcessEnv = {
   ...process.env,
   ...(dbPassword ? { PGPASSWORD: dbPassword } : {}),
 };
+delete environment.PGHOST;
+delete environment.PGHOSTADDR;
+delete environment.PGSERVICE;
+delete environment.PGSERVICEFILE;
 
 const currentDirectory = path.dirname(
   fileURLToPath(import.meta.url),
@@ -79,6 +89,7 @@ const syntheticAuthorizationSeedSql = `
   JOIN public.permissions AS p
     ON (
       (r.slug = 'employee' AND p.key IN ('customers.create', 'customers.manage_membership', 'customers.manage_routine', 'customers.update', 'customers.view', 'dashboard.view', 'payments.view', 'plans.view', 'profile.view', 'profile.update'))
+      OR (r.slug = 'admin' AND p.key = 'payments.view')
       OR (r.slug = 'owner' AND p.key IN ('dashboard.view', 'roles.view', 'users.view'))
     )
   ON CONFLICT (role_id, permission_id) DO NOTHING;

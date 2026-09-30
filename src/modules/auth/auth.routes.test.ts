@@ -225,6 +225,7 @@ test("POST /auth/login devuelve authorization y rechaza datos sensibles", async 
       "customer_health_profiles.view",
       "customers.manage_account",
       "customers.view",
+      "payments.view",
       "plans.create",
       "plans.delete",
       "plans.update",

@@ -17,6 +17,7 @@ import { authRouter } from "./modules/auth/auth.routes.js";
 import { customersRouter } from "./modules/customers/customers.routes.js";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
+import { paymentsRouter } from "./modules/payments/payments.routes.js";
 import { plansRouter } from "./modules/plans/plans.routes.js";
 import { profileRouter } from "./modules/profile/profile.routes.js";
 
@@ -64,6 +65,7 @@ app.use("/auth", authRouter);
 app.use("/customers", customersRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/health", healthRouter);
+app.use("/payments", paymentsRouter);
 app.use("/plans", plansRouter);
 app.use("/profile", profileRouter);
 
