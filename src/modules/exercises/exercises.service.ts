@@ -15,17 +15,39 @@ type ExerciseRow = {
   provider_item_id: string | null;
   body_parts: string[];
   target_muscles: string[];
+  secondary_muscles: string[];
   equipments: string[];
+  exercise_type: string | null;
+  instructions: string[];
+  tips: string[];
+  keywords: string[];
+  variations: string[];
   image_url: string | null;
+  video_url: string | null;
+  description: string | null;
+  raw_payload: unknown;
+  last_synced_at: Date | null;
   is_active: boolean;
   is_favorite: boolean;
   is_preview_hidden: boolean;
 };
 
-const columns = "id, slug, name, display_name, display_name_es, provider, provider_item_id, body_parts, target_muscles, equipments, image_url, is_active, is_favorite, is_preview_hidden";
+const columns = `id, slug, name, display_name, display_name_es, provider, provider_item_id,
+  body_parts, target_muscles, secondary_muscles, equipments, exercise_type,
+  instructions, tips, keywords, variations, image_url, video_url, description,
+  raw_payload, last_synced_at, is_active, is_favorite, is_preview_hidden`;
 
 function toExercise(row: ExerciseRow) {
-  return { ...row, id: Number(row.id) };
+  const localImage = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(row.image_url ?? "")
+    ? row.image_url
+    : null;
+  return {
+    ...row,
+    id: Number(row.id),
+    image_url: localImage,
+    video_url: null,
+    last_synced_at: row.last_synced_at?.toISOString() ?? null,
+  };
 }
 
 async function requirePermission(
@@ -43,7 +65,13 @@ async function requirePermission(
 
 export async function listExercises(actorUserId: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requirePermission(client, "exercises.view");
+    const auth = await client.query<{ permissions: string[] | null; is_owner: boolean }>(
+      "SELECT public.get_current_permissions() AS permissions, public.is_owner() AS is_owner",
+    );
+    const allowed = ["exercises.view", "routines.view", "customers.manage_routine"];
+    if (!auth.rows[0]?.is_owner && !allowed.some((permission) => auth.rows[0]?.permissions?.includes(permission))) {
+      throw new AppError(403, "FORBIDDEN", "No autorizado para consultar ejercicios");
+    }
     const result = await client.query<ExerciseRow>(
       `SELECT ${columns} FROM public.exercises
        WHERE is_active = true

@@ -27,7 +27,7 @@ function adminSql(sql: string) {
   });
 }
 
-async function createUser(role: "owner" | "client") {
+async function createUser(role: "owner" | "client" | "employee") {
   const userId = randomUUID();
   const email = `${userId}${testEmailDomain}`;
   const hash = await bcrypt.hash(password, 10);
@@ -70,7 +70,9 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
   assert.equal((await request(app).get("/exercises")).status, 401);
   const owner = await createUser("owner");
   const client = await createUser("client");
+  const employee = await createUser("employee");
   assert.equal((await request(app).get("/exercises").set("Cookie", client.cookie)).status, 403);
+  assert.equal((await request(app).get("/exercises").set("Cookie", employee.cookie)).status, 200);
 
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
@@ -94,6 +96,14 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
   const list = await request(app).get("/exercises").set("Cookie", owner.cookie);
   assert.equal(list.status, 200);
   assert.ok(list.body.data.some((item: { id: number }) => item.id === id));
+
+  adminSql(`UPDATE public.exercises
+    SET image_url = 'https://example.invalid/legacy.png', video_url = 'https://example.invalid/legacy.mp4'
+    WHERE id = ${id}`);
+  const redacted = await request(app).get("/exercises").set("Cookie", owner.cookie);
+  const redactedExercise = redacted.body.data.find((item: { id: number }) => item.id === id);
+  assert.equal(redactedExercise.image_url, null);
+  assert.equal(redactedExercise.video_url, null);
 
   const routineId = randomUUID();
   adminSql(`INSERT INTO public.routines
