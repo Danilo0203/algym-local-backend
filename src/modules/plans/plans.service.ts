@@ -38,12 +38,12 @@ function hasPermission(
 
 const plansViewPermission = "plans.view";
 
-type PlanRow = Omit<Plan, "price"> & { price: string };
+type PlanRow = Omit<Plan, "id" | "price"> & { id: string | number; price: string };
 
 const planColumns = `id, name, description, price, duration_days, is_active`;
 
 function toPlan(row: PlanRow): Plan {
-  return { ...row, price: Number(row.price) };
+  return { ...row, id: Number(row.id), price: Number(row.price) };
 }
 
 function requirePermission(auth: AuthorizationRow, permission: string): void {

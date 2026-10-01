@@ -46,6 +46,7 @@ type AuthenticatedUserContextRow = {
   profile_role: string;
   is_active: boolean;
   role_slug: string;
+  role_scope: string;
   permissions: string[] | null;
   is_owner: boolean;
 };
@@ -99,31 +100,6 @@ const fallbackPasswordHash = bcrypt.hashSync(
   "algym-invalid-credentials-placeholder",
   10,
 );
-
-const panelRoleSlugs = new Set([
-  "admin",
-  "employee",
-  "owner",
-  "trainer",
-]);
-
-function resolveAuthorizationScope(
-  roleSlug: string,
-): "panel" | "client" {
-  if (roleSlug === "client") {
-    return authorizationScopeSchema.parse("client");
-  }
-
-  if (panelRoleSlugs.has(roleSlug)) {
-    return authorizationScopeSchema.parse("panel");
-  }
-
-  throw new AppError(
-    500,
-    "UNKNOWN_ROLE_SCOPE",
-    "No se pudo determinar el scope del rol",
-  );
-}
 
 export function getSessionCookieOptions(): CookieOptions {
   return {
@@ -212,7 +188,7 @@ function toAuthenticatedUserContext(
     },
     authorization: {
       roleSlug: row.role_slug,
-      scope: resolveAuthorizationScope(row.role_slug),
+      scope: authorizationScopeSchema.parse(row.role_scope),
       permissions: row.permissions ?? [],
       isOwner: row.is_owner,
     },
@@ -232,6 +208,7 @@ async function queryAuthenticatedUserContext(
         p.role::text AS profile_role,
         p.is_active,
         public.get_current_role_slug() AS role_slug,
+        public.get_current_role_scope() AS role_scope,
         public.get_current_permissions() AS permissions,
         public.is_owner() AS is_owner
       FROM auth.users AS u

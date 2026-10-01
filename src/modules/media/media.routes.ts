@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
-import { readMedia, requireMediaUploadPermission, saveMedia } from "./media.service.js";
+import { readMedia, requireMediaReadPermission, requireMediaUploadPermission, saveMedia } from "./media.service.js";
 
 export const mediaRouter = Router();
 const mediaKindSchema = z.enum(["exercises", "products"]);
@@ -25,9 +25,10 @@ mediaRouter.post("/:kind", express.raw({ type: ["image/png", "image/jpeg", "imag
 
 mediaRouter.get("/:kind/:filename", async (request, response, next) => {
   try {
-    await validateSessionToken(readSessionTokenFromRequest(request));
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
     const kind = mediaKindSchema.parse(request.params.kind);
     const filename = z.string().parse(request.params.filename);
+    await requireMediaReadPermission(session.userId, kind, filename);
     const file = await readMedia(kind, filename);
     response.set("Content-Type", file.contentType);
     response.set("Cache-Control", "private, max-age=86400, immutable");

@@ -65,10 +65,11 @@ export async function listRoles(actorUserId: string) {
   return withUserTransaction(actorUserId, async (client) => {
     await requirePermission(client, "roles.view");
     const result = await client.query<RoleRow & { user_count: string }>(
-      `SELECT roles.*, count(profiles.id) FILTER (WHERE users.deleted_at IS NULL)::text AS user_count
+      `SELECT roles.*, count(profiles.id)::text AS user_count
        FROM public.roles AS roles
-       LEFT JOIN public.profiles AS profiles ON profiles.role::text = roles.slug
-       LEFT JOIN auth.users AS users ON users.id = profiles.id
+       LEFT JOIN public.profiles AS profiles
+         ON profiles.panel_role_id = roles.id
+         OR (profiles.panel_role_id IS NULL AND profiles.role::text = roles.slug)
        GROUP BY roles.id
        ORDER BY roles.created_at, roles.slug`,
     );
@@ -137,6 +138,13 @@ export async function updateRole(actorUserId: string, roleId: string, input: Upd
     }
     if (input.permissionIds !== undefined) {
       await replaceRolePermissions(client, roleId, input.permissionIds);
+      await client.query(
+        `UPDATE auth.sessions SET revoked_at = COALESCE(revoked_at, now())
+         WHERE user_id IN (
+           SELECT id FROM public.profiles WHERE panel_role_id = $1
+         ) AND revoked_at IS NULL`,
+        [roleId],
+      );
     }
     if (input.name !== undefined) {
       await client.query(
@@ -157,34 +165,43 @@ export async function deleteRole(actorUserId: string, roleId: string, input: Del
     }
     const assigned = await client.query<{ id: string }>(
       `SELECT profiles.id FROM public.profiles AS profiles
-       JOIN auth.users AS users ON users.id = profiles.id
-       WHERE profiles.role::text = $1 AND users.deleted_at IS NULL FOR UPDATE OF profiles`,
-      [role.slug],
+       WHERE profiles.panel_role_id = $1 FOR UPDATE OF profiles`,
+      [role.id],
     );
     if (assigned.rows.length > 0) {
       if (!input.replacementRoleSlug) {
         throw new AppError(409, "REASSIGN_REQUIRED", "El rol tiene usuarios asignados");
       }
-      const replacement = await client.query<{ slug: string }>(
-        `SELECT slug FROM public.roles WHERE slug = $1 AND scope = $2 AND id <> $3`,
+      const actorRole = await client.query<{ base_role: string }>(
+        "SELECT public.get_my_role()::text AS base_role",
+      );
+      if (!['owner', 'admin'].includes(actorRole.rows[0]?.base_role ?? '')) {
+        throw new AppError(403, "FORBIDDEN", "No autorizado para reasignar usuarios");
+      }
+      const replacement = await client.query<{ id: string; slug: string; is_system: boolean }>(
+        `SELECT id, slug, is_system FROM public.roles
+         WHERE slug = $1 AND scope = $2 AND id <> $3 FOR UPDATE`,
         [input.replacementRoleSlug, role.scope, role.id],
       );
-      if (!replacement.rows[0] ||
-          !["owner", "admin", "trainer", "employee", "client"].includes(input.replacementRoleSlug)) {
+      const nextRole = replacement.rows[0];
+      if (!nextRole || (nextRole.is_system && !["owner", "admin", "trainer", "employee"].includes(nextRole.slug))) {
         throw new AppError(400, "INVALID_REPLACEMENT_ROLE", "Rol de reemplazo no válido");
       }
       const ids = assigned.rows.map((row) => row.id);
       await client.query(
-        `UPDATE public.profiles SET role = $2::public.user_role, updated_at = now()
+        `UPDATE public.profiles
+         SET role = (CASE WHEN $2::boolean THEN $3::text ELSE 'custom' END)::public.user_role,
+             panel_role_id = CASE WHEN $2::boolean THEN NULL ELSE $4::uuid END,
+             updated_at = now()
          WHERE id = ANY($1::uuid[])`,
-        [ids, input.replacementRoleSlug],
+        [ids, nextRole.is_system, nextRole.slug, nextRole.id],
       );
       await client.query(
         `UPDATE auth.users
          SET raw_user_meta_data = COALESCE(raw_user_meta_data, '{}'::jsonb)
                                   || jsonb_build_object('role', $2::text), updated_at = now()
          WHERE id = ANY($1::uuid[])`,
-        [ids, input.replacementRoleSlug],
+        [ids, nextRole.slug],
       );
       await client.query(
         `UPDATE auth.sessions SET revoked_at = COALESCE(revoked_at, now())

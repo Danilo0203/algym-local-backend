@@ -10,6 +10,7 @@ type UserRow = {
   email: string;
   full_name: string;
   role: InternalUserRole;
+  base_role: string;
   created_at: Date;
   last_sign_in_at: Date | null;
   is_active: boolean;
@@ -17,11 +18,18 @@ type UserRow = {
 
 type LockedUser = UserRow;
 
+type ResolvedRole = {
+  slug: string;
+  baseRole: "owner" | "admin" | "trainer" | "employee" | "custom";
+  panelRoleId: string | null;
+};
+
 const userColumns = `
   users.id,
   users.email,
   profiles.full_name,
-  profiles.role::text AS role,
+  public.get_profile_role(users.id) AS role,
+  profiles.role::text AS base_role,
   COALESCE(profiles.created_at, users.created_at) AS created_at,
   users.last_sign_in_at,
   profiles.is_active
@@ -39,11 +47,27 @@ async function requirePermission(client: PoolClient, permission: string): Promis
   return result.rows[0].actor_role ?? "";
 }
 
-function assertRoleAssignment(actorRole: string, targetRole: InternalUserRole): void {
-  if ((targetRole === "admin" || targetRole === "owner") &&
+function assertRoleAssignment(actorRole: string, targetRole: string, isCustom = false): void {
+  if ((targetRole === "admin" || targetRole === "owner" || isCustom) &&
       actorRole !== "admin" && actorRole !== "owner") {
     throw new AppError(403, "FORBIDDEN", "No autorizado para asignar este rol");
   }
+}
+
+async function resolvePanelRole(client: PoolClient, slug: string): Promise<ResolvedRole> {
+  const result = await client.query<{
+    id: string; slug: string; is_system: boolean;
+  }>(
+    `SELECT id, slug, is_system FROM public.roles WHERE slug = $1 AND scope = 'panel'`,
+    [slug],
+  );
+  const role = result.rows[0];
+  if (!role) throw new AppError(400, "INVALID_ROLE", "Rol de panel no válido");
+  if (!role.is_system) return { slug: role.slug, baseRole: "custom", panelRoleId: role.id };
+  if (["owner", "admin", "trainer", "employee"].includes(role.slug)) {
+    return { slug: role.slug, baseRole: role.slug as ResolvedRole["baseRole"], panelRoleId: null };
+  }
+  throw new AppError(400, "INVALID_ROLE", "Rol de panel no válido");
 }
 
 async function getLockedUser(client: PoolClient, userId: string): Promise<LockedUser> {
@@ -52,7 +76,7 @@ async function getLockedUser(client: PoolClient, userId: string): Promise<Locked
      FROM auth.users AS users
      JOIN public.profiles AS profiles ON profiles.id = users.id
      WHERE users.id = $1 AND users.deleted_at IS NULL
-       AND profiles.role IN ('owner', 'admin', 'trainer', 'employee')
+       AND profiles.role IN ('owner', 'admin', 'trainer', 'employee', 'custom')
      FOR UPDATE OF users, profiles`,
     [userId],
   );
@@ -63,7 +87,7 @@ async function getLockedUser(client: PoolClient, userId: string): Promise<Locked
 }
 
 async function protectLastOwner(client: PoolClient, existing: LockedUser): Promise<void> {
-  if (existing.role !== "owner" || !existing.is_active) return;
+  if (existing.base_role !== "owner" || !existing.is_active) return;
   await client.query("SELECT pg_advisory_xact_lock(573145) ");
   const result = await client.query<{ count: string }>(
     `SELECT count(*)::text AS count
@@ -85,7 +109,7 @@ export async function listInternalUsers(actorUserId: string) {
        FROM auth.users AS users
        JOIN public.profiles AS profiles ON profiles.id = users.id
        WHERE users.deleted_at IS NULL
-         AND profiles.role IN ('owner', 'admin', 'trainer', 'employee')
+         AND profiles.role IN ('owner', 'admin', 'trainer', 'employee', 'custom')
        ORDER BY COALESCE(profiles.created_at, users.created_at) DESC, users.id DESC`,
     );
     return { data: result.rows };
@@ -95,9 +119,9 @@ export async function listInternalUsers(actorUserId: string) {
 export async function listInternalRoles(actorUserId: string) {
   return withUserTransaction(actorUserId, async (client) => {
     await requirePermission(client, "users.view");
-    const result = await client.query<{ slug: InternalUserRole; name: string }>(
+    const result = await client.query<{ slug: string; name: string }>(
       `SELECT slug, name FROM public.roles
-       WHERE scope = 'panel' AND slug IN ('owner', 'admin', 'trainer', 'employee')
+       WHERE scope = 'panel' AND (slug IN ('owner', 'admin', 'trainer', 'employee') OR is_system = false)
        ORDER BY name, slug`,
     );
     return { data: result.rows };
@@ -107,7 +131,8 @@ export async function listInternalRoles(actorUserId: string) {
 export async function createInternalUser(actorUserId: string, input: CreateUserInput) {
   return withUserTransaction(actorUserId, async (client) => {
     const actorRole = await requirePermission(client, "users.create");
-    assertRoleAssignment(actorRole, input.role);
+    const role = await resolvePanelRole(client, input.role);
+    assertRoleAssignment(actorRole, role.slug, role.baseRole === "custom");
     const hash = await bcrypt.hash(input.password, 10);
     try {
       const user = await client.query<{ id: string }>(
@@ -124,9 +149,9 @@ export async function createInternalUser(actorUserId: string, input: CreateUserI
       const userId = user.rows[0]!.id;
       await client.query(
         `INSERT INTO public.profiles
-           (id, full_name, phone, birth_date, biometric_id, role, is_active)
-         VALUES ($1, $2, '', NULL, NULL, $3::public.user_role, true)`,
-        [userId, input.full_name, input.role],
+           (id, full_name, phone, birth_date, biometric_id, role, panel_role_id, is_active)
+         VALUES ($1, $2, '', NULL, NULL, $3::public.user_role, $4::uuid, true)`,
+        [userId, input.full_name, role.baseRole, role.panelRoleId],
       );
       return { id: userId };
     } catch (error) {
@@ -146,25 +171,28 @@ export async function updateInternalUser(
   return withUserTransaction(actorUserId, async (client) => {
     const actorRole = await requirePermission(client, "users.update");
     const existing = await getLockedUser(client, userId);
-    assertRoleAssignment(actorRole, existing.role);
-    if (input.role) assertRoleAssignment(actorRole, input.role);
+    assertRoleAssignment(actorRole, existing.role, existing.base_role === "custom");
+    const nextRole = input.role ? await resolvePanelRole(client, input.role) : null;
+    if (nextRole) assertRoleAssignment(actorRole, nextRole.slug, nextRole.baseRole === "custom");
     if (input.is_active === false && actorUserId === userId) {
       throw new AppError(409, "SELF_DEACTIVATE", "No puedes desactivar tu propia cuenta");
     }
-    if (existing.role === "owner" &&
+    if (existing.base_role === "owner" &&
         ((input.role && input.role !== "owner") || input.is_active === false)) {
       await protectLastOwner(client, existing);
     }
 
     const fullName = input.full_name ?? existing.full_name;
-    const role = input.role ?? existing.role;
+    const role = nextRole?.slug ?? existing.role;
     if (input.full_name || input.role || input.is_active !== undefined) {
       await client.query(
         `UPDATE public.profiles
-         SET full_name = $2, role = $3::public.user_role,
-             is_active = COALESCE($4::boolean, is_active), updated_at = now()
+         SET full_name = $2,
+             role = COALESCE($3::public.user_role, role),
+             panel_role_id = CASE WHEN $3::public.user_role IS NOT NULL THEN $4::uuid ELSE panel_role_id END,
+             is_active = COALESCE($5::boolean, is_active), updated_at = now()
          WHERE id = $1`,
-        [userId, fullName, role, input.is_active ?? null],
+        [userId, fullName, nextRole?.baseRole ?? null, nextRole?.panelRoleId ?? null, input.is_active ?? null],
       );
     }
 
@@ -196,7 +224,7 @@ export async function deleteInternalUser(actorUserId: string, userId: string) {
       throw new AppError(409, "SELF_DELETE", "No puedes eliminar tu propia cuenta");
     }
     const existing = await getLockedUser(client, userId);
-    assertRoleAssignment(actorRole, existing.role);
+    assertRoleAssignment(actorRole, existing.role, existing.base_role === "custom");
     await protectLastOwner(client, existing);
     await client.query(
       `UPDATE auth.users

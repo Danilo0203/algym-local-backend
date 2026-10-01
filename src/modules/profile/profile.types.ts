@@ -5,7 +5,7 @@ export type ProfileResponse = {
   email: string | null;
   full_name: string;
   phone: string;
-  birth_date: string;
+  birth_date: string | null;
   gender: ProfileGender;
   avatar_url: string | null;
   role: string | null;
@@ -16,6 +16,6 @@ export type ProfileResponse = {
 export type ProfileUpdateInput = {
   full_name?: string;
   phone?: string;
-  birth_date?: string;
+  birth_date?: string | null;
   gender?: ProfileGender;
 };

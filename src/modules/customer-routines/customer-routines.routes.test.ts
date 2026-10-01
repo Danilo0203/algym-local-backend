@@ -84,6 +84,7 @@ async function cleanup(): Promise<void> {
   runAdminSql(`
     DELETE FROM public.routines
     WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${testEmailDomain}');
+    DELETE FROM public.exercises WHERE name LIKE 'ZZTEST ROUTINES EXERCISE %';
     DELETE FROM public.training_profiles
     WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${testEmailDomain}');
     DELETE FROM public.body_assessments
@@ -553,7 +554,7 @@ test("generación local guarda borrador y detalles en una transacción", async (
     generation_version: "routine_engine_v1",
     details: [
       { day_of_week: 1, exercise_id: null, exercise_order: 1, block_type: "warmup", exercise_name_snapshot: "Calentamiento local" },
-      { day_of_week: 1, exercise_id: null, exercise_order: 2, block_type: "strength", sets: 3, reps: "10", exercise_name_snapshot: "Sentadilla local" },
+      { day_of_week: 1, exercise_id: null, exercise_order: 2, block_type: "strength", sets: 3, reps: "10", notes: "No hay ejercicio compatible en el catálogo local.", exercise_name_snapshot: "Sentadilla local" },
     ],
   };
 
@@ -595,6 +596,38 @@ test("generación local guarda borrador y detalles en una transacción", async (
   assert.equal(generated.body.routine.source, "system");
   assert.equal(runAdminQuery(`SELECT status FROM public.routines WHERE id = '${previousDraftId}';`), "archived");
   assert.equal(runAdminQuery(`SELECT count(*) FROM public.routine_details WHERE routine_id = '${generated.body.routine.id}';`), "2");
+
+  const prematureApproval = await request(app)
+    .patch(`/customers/${customer.userId}/routines/${generated.body.routine.id}`)
+    .set("Cookie", authorizedCookie)
+    .send({ status: "active", source: "admin" });
+  assert.equal(prematureApproval.status, 409);
+  assert.equal(prematureApproval.body.error.code, "ROUTINE_EXERCISES_INCOMPLETE");
+  assert.equal(runAdminQuery(`SELECT status FROM public.routines WHERE id = '${generated.body.routine.id}';`), "draft");
+
+  const localExerciseId = Number(runAdminQuery(`
+    INSERT INTO public.exercises (name, exercise_type)
+    VALUES ('ZZTEST ROUTINES EXERCISE ${randomUUID()}', 'strength')
+    RETURNING id;
+  `));
+  const pendingDetailId = Number(runAdminQuery(`
+    SELECT id FROM public.routine_details
+    WHERE routine_id = '${generated.body.routine.id}' AND block_type = 'strength';
+  `));
+  const replaced = await request(app)
+    .patch(`/customers/${customer.userId}/routines/${generated.body.routine.id}/details/${pendingDetailId}`)
+    .set("Cookie", authorizedCookie)
+    .send({ exercise_id: localExerciseId });
+  assert.equal(replaced.status, 200);
+  assert.equal(replaced.body.detail.exercise_id, localExerciseId);
+  assert.equal(replaced.body.detail.notes, null);
+
+  const approved = await request(app)
+    .patch(`/customers/${customer.userId}/routines/${generated.body.routine.id}`)
+    .set("Cookie", authorizedCookie)
+    .send({ status: "active", source: "admin" });
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.routine.status, "active");
 
   const pendingCustomer = await createUser("client");
   const pending = await request(app)

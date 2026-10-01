@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const internalUserRoleSchema = z.enum(["owner", "admin", "trainer", "employee"]);
+export const internalUserRoleSchema = z.string().trim().regex(/^[a-z][a-z0-9_]{2,39}$/);
 export type InternalUserRole = z.infer<typeof internalUserRoleSchema>;
 
 export const userIdParamSchema = z.uuid();

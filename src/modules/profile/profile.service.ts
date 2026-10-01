@@ -21,7 +21,7 @@ type ProfileRow = {
   email: string | null;
   full_name: string;
   phone: string;
-  birth_date: string;
+  birth_date: string | null;
   gender: "male" | "female" | "other";
   avatar_url: string | null;
   role: string | null;
@@ -124,7 +124,7 @@ async function getProfileRow(
         to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
         p.gender::text AS gender,
         p.avatar_url,
-        p.role::text AS role,
+        public.get_profile_role(p.id) AS role,
         p.created_at,
         p.updated_at,
         p.is_active
@@ -143,10 +143,10 @@ async function getProfileRow(
 
 function buildProfileUpdateQuery(input: ProfileUpdateInput): {
   assignments: string[];
-  values: Array<string>;
+  values: Array<string | null>;
 } {
   const assignments: string[] = [];
-  const values: Array<string> = [];
+  const values: Array<string | null> = [];
 
   for (const [field, column] of Object.entries(profileColumnMap) as Array<
     [keyof ProfileUpdateInput, string]

@@ -54,6 +54,48 @@ export async function requireMediaUploadPermission(actorUserId: string, kind: Me
   });
 }
 
+export async function requireMediaReadPermission(actorUserId: string, kind: MediaKind, filename: string) {
+  if (!filenamePattern.test(filename)) {
+    throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");
+  }
+
+  const url = `/api/media/${kind}/${filename}`;
+  await withUserTransaction(actorUserId, async (client) => {
+    const result = await client.query<{ permissions: string[] | null; is_owner: boolean }>(
+      "SELECT public.get_current_permissions() AS permissions, public.is_owner() AS is_owner",
+    );
+    const auth = result.rows[0];
+    const allowed = kind === "exercises"
+      ? ["exercises.view", "exercises.create", "exercises.update", "routines.view", "customers.manage_routine"]
+      : ["products.view", "products.create", "products.update", "products.delete", "inventory.view", "inventory.adjust"];
+    const canViewCatalog = Boolean(auth?.is_owner || allowed.some((permission) => auth?.permissions?.includes(permission)));
+
+    if (!canViewCatalog) {
+      if (kind !== "exercises") throw new AppError(403, "FORBIDDEN", "No autorizado para consultar esta imagen");
+      const ownActiveRoutine = await client.query(
+        `SELECT 1
+         FROM public.exercises AS exercise
+         JOIN public.routine_details AS detail ON detail.exercise_id = exercise.id
+         JOIN public.routines AS routine ON routine.id = detail.routine_id
+         WHERE exercise.image_url = $1
+           AND routine.user_id = $2
+           AND routine.status = 'active'
+           AND routine.is_active = true
+         LIMIT 1`,
+        [url, actorUserId],
+      );
+      if (!ownActiveRoutine.rows[0]) {
+        throw new AppError(403, "FORBIDDEN", "No autorizado para consultar esta imagen");
+      }
+      return;
+    }
+
+    const table = kind === "exercises" ? "public.exercises" : "public.products";
+    const referenced = await client.query(`SELECT 1 FROM ${table} WHERE image_url = $1 LIMIT 1`, [url]);
+    if (!referenced.rows[0]) throw new AppError(404, "MEDIA_NOT_FOUND", "Imagen no encontrada");
+  });
+}
+
 export async function saveMedia(kind: MediaKind, bytes: Buffer) {
   if (bytes.length === 0 || bytes.length > maxImageBytes) {
     throw new AppError(400, "INVALID_MEDIA", "La imagen debe medir como máximo 5 MB");

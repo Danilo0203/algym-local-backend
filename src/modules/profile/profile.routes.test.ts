@@ -323,6 +323,22 @@ test("PATCH /profile permite actualizar para owner", async () => {
   assertNoSensitiveFields(response.body);
 });
 
+test("PATCH /profile admite campos personales opcionales vacíos", async () => {
+  const { email } = await createSyntheticUser({ role: "owner" });
+  const agent = request.agent(app);
+  assert.equal((await agent.post("/auth/login").send({ email, password: testPassword })).status, 200);
+
+  const cleared = await agent.patch("/profile").send({ birth_date: null });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.birth_date, null);
+  assert.equal(cleared.body.gender, "male");
+
+  const renamed = await agent.patch("/profile").send({ full_name: "Perfil Sin Fecha" });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.birth_date, null);
+  assert.equal(renamed.body.gender, "male");
+});
+
 test("PATCH /profile permite actualizar para rol con profile.update y conserva campos omitidos", async () => {
   const { email } = await createSyntheticUser({
     role: "employee",

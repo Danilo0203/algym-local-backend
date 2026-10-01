@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "kind": "exercises",
+      "id": "123",
+      "expected_image_url": null,
+      "expected_animation_url": null,
+      "file": "/ruta/absoluta/imagenes/ejercicio.png"
+    },
+    {
+      "kind": "products",
+      "id": "00000000-0000-4000-8000-000000000000",
+      "expected_image_url": null,
+      "file": "/ruta/absoluta/imagenes/producto.webp"
+    }
+  ]
+}

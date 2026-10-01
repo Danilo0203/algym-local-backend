@@ -5,7 +5,7 @@ import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.
 import { paidMembershipSchema, paymentIdSchema, paymentsListQuerySchema, reversePaymentSchema } from "./payments.schemas.js";
 import { createPaidMembership } from "./paid-membership.service.js";
 import { getPaymentReversalContext, reverseAndRecreatePayment } from "./payment-reversal.service.js";
-import { listPayments } from "./payments.service.js";
+import { getPaymentDetail, listPayments } from "./payments.service.js";
 
 export const paymentsRouter = Router();
 
@@ -27,6 +27,14 @@ paymentsRouter.post("/membership", async (request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+paymentsRouter.get("/:id", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const paymentId = paymentIdSchema.parse(request.params.id);
+    response.status(200).json(await getPaymentDetail(session.userId, paymentId));
+  } catch (error) { next(error); }
 });
 
 paymentsRouter.get("/:id/reversal-context", async (request, response, next) => {

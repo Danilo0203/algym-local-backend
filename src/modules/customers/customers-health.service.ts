@@ -436,6 +436,57 @@ const initialTrainingColumns = [
   "medical_clearance_notes",
 ] as const;
 
+async function syncTrainingProfileCompleteness(client: PoolClient, customerId: string): Promise<void> {
+  const result = await client.query<{ is_complete: boolean }>(
+    `SELECT COALESCE(
+       profiles.birth_date IS NOT NULL
+       AND profiles.gender IS NOT NULL
+       AND assessment.weight_kg > 0
+       AND assessment.height_cm > 0
+       AND training.primary_goal IS NOT NULL
+       AND training.parq_requires_attention IS NOT NULL
+       AND (training.parq_requires_attention = false
+            OR NULLIF(BTRIM(training.injuries_or_pain), '') IS NOT NULL)
+       AND training.experience_level IS NOT NULL
+       AND training.days_per_week > 0
+       AND training.session_minutes > 0
+       AND training.activity_level IS NOT NULL
+       AND training.cardio_preference IS NOT NULL
+       AND (COALESCE(training.training_location, 'gym') = 'gym'
+            OR COALESCE(cardinality(training.equipment_available), 0) > 0),
+       false
+     ) AS is_complete
+     FROM public.training_profiles AS training
+     JOIN public.profiles AS profiles ON profiles.id = training.user_id
+     LEFT JOIN LATERAL (
+       SELECT weight_kg, height_cm
+       FROM public.body_assessments
+       WHERE user_id = training.user_id
+       ORDER BY date DESC, id DESC
+       LIMIT 1
+     ) AS assessment ON true
+     WHERE training.user_id = $1`,
+    [customerId],
+  );
+  const completion = result.rows[0];
+  if (!completion) return;
+
+  await client.query(
+    `UPDATE public.training_profiles
+     SET is_complete = $2
+     WHERE user_id = $1 AND is_complete IS DISTINCT FROM $2`,
+    [customerId, completion.is_complete],
+  );
+  await client.query(
+    `UPDATE public.profiles
+     SET training_profile_status = CASE WHEN $2 THEN 'complete' ELSE 'pending' END
+     WHERE id = $1
+       AND training_profile_status IS DISTINCT FROM
+         CASE WHEN $2 THEN 'complete' ELSE 'pending' END`,
+    [customerId, completion.is_complete],
+  );
+}
+
 async function saveCashCustomerIntake(
   client: PoolClient,
   customerId: string,
@@ -564,6 +615,8 @@ async function saveCashCustomerIntake(
       [customerId, ...columns.map((column) => intake.training_profile?.[column])],
     );
   }
+
+  await syncTrainingProfileCompleteness(client, customerId);
 }
 
 export async function insertInitialCustomerIntake(

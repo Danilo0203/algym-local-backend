@@ -82,22 +82,27 @@ export async function listExercises(actorUserId: string) {
 }
 
 export async function createExercise(actorUserId: string, input: CreateExerciseInput) {
-  const filename = input.image_url.split("/").at(-1)!;
+  const filename = input.image_url?.split("/").at(-1);
   return withUserTransaction(actorUserId, async (client) => {
     await requirePermission(client, "exercises.create");
-    await readMedia("exercises", filename);
+    if (filename) await readMedia("exercises", filename);
     const baseSlug = input.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
       .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "exercise";
     const slug = `${baseSlug}-${randomBytes(4).toString("hex")}`;
     const result = await client.query<ExerciseRow>(
       `INSERT INTO public.exercises
         (slug, name, display_name, provider, exercise_type, image_url, animation_url,
+         body_parts, target_muscles, secondary_muscles, equipments, instructions, keywords,
          raw_payload, last_synced_at, is_active)
-       VALUES ($1, $2, $2, 'custom_local', 'custom', $3, $3,
-               jsonb_build_object('source', 'manual_upload', 'original_file_name', $4::text),
+       VALUES ($1, $2, $2, 'custom_local', $6, $3, $3,
+               $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[],
+               jsonb_build_object('source', $4::text, 'original_file_name', $5::text),
                now(), true)
        RETURNING ${columns}`,
-      [slug, input.name, input.image_url, input.original_file_name ?? null],
+      [slug, input.name, input.image_url ?? null, filename ? "manual_upload" : "manual_entry",
+        input.original_file_name ?? null, input.exercise_type ?? "strength",
+        input.body_parts ?? [], input.target_muscles ?? [], input.secondary_muscles ?? [],
+        input.equipments ?? [], input.instructions ?? [], input.keywords ?? []],
     );
     return toExercise(result.rows[0]!);
   });
@@ -106,15 +111,32 @@ export async function createExercise(actorUserId: string, input: CreateExerciseI
 export async function updateExercise(actorUserId: string, id: number, input: UpdateExerciseInput) {
   return withUserTransaction(actorUserId, async (client) => {
     await requirePermission(client, "exercises.update");
+    if (input.imageUrl) await readMedia("exercises", input.imageUrl.split("/").at(-1)!);
     const result = await client.query<ExerciseRow>(
       `UPDATE public.exercises
        SET name = COALESCE($2, name),
            display_name = COALESCE($2, display_name),
            is_favorite = COALESCE($3, is_favorite),
-           is_preview_hidden = COALESCE($4, is_preview_hidden)
+           is_preview_hidden = COALESCE($4, is_preview_hidden),
+           image_url = COALESCE($5, image_url),
+           animation_url = COALESCE($5, animation_url),
+           body_parts = COALESCE($7::text[], body_parts),
+           target_muscles = COALESCE($8::text[], target_muscles),
+           secondary_muscles = COALESCE($9::text[], secondary_muscles),
+           equipments = COALESCE($10::text[], equipments),
+           exercise_type = COALESCE($11::text, exercise_type),
+           instructions = COALESCE($12::text[], instructions),
+           keywords = COALESCE($13::text[], keywords),
+           raw_payload = CASE WHEN $5::text IS NOT NULL
+             THEN COALESCE(raw_payload, '{}'::jsonb) || jsonb_build_object(
+               'source', 'manual_upload', 'original_file_name', $6::text)
+             ELSE raw_payload END
        WHERE id = $1
        RETURNING ${columns}`,
-      [id, input.displayName ?? null, input.isFavorite ?? null, input.isPreviewHidden ?? null],
+      [id, input.displayName ?? null, input.isFavorite ?? null, input.isPreviewHidden ?? null,
+        input.imageUrl ?? null, input.originalFileName ?? null, input.body_parts ?? null,
+        input.target_muscles ?? null, input.secondary_muscles ?? null, input.equipments ?? null,
+        input.exercise_type ?? null, input.instructions ?? null, input.keywords ?? null],
     );
     const exercise = result.rows[0];
     if (!exercise) throw new AppError(404, "EXERCISE_NOT_FOUND", "Ejercicio no encontrado");

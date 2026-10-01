@@ -66,7 +66,7 @@ export const profileResponseSchema = z.object({
   phone: z.string(),
   birth_date: z
     .string()
-    .refine(isValidCalendarDate, "Fecha inválida"),
+    .refine(isValidCalendarDate, "Fecha inválida").nullable(),
   gender: profileGenderSchema,
   avatar_url: z.string().nullable(),
   role: z.string().nullable(),
@@ -86,7 +86,7 @@ export const profileUpdateSchema = z
       .refine(
         isValidCalendarDate,
         "La fecha debe tener formato YYYY-MM-DD y ser válida",
-      ),
+      ).nullable(),
     gender: profileGenderSchema,
   })
   .partial()

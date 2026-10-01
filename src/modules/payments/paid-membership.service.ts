@@ -146,6 +146,13 @@ export async function createPaidMembershipInTransaction(
     throw new AppError(409, "CASH_SESSION_REQUIRED", "El cobro no quedó asociado a la caja abierta");
   }
 
+  if (input.requireSession) {
+    await client.query(
+      `SELECT private.create_pending_routine_for_cash_payment($1::uuid)`,
+      [paymentId],
+    );
+  }
+
   return {
     subscription_id: subscriptionId,
     payment_id: paymentId,

@@ -18,6 +18,10 @@ const migrationPath = path.join(
   projectRoot,
   "database/migrations/0010_rbac_hardening.sql",
 );
+const currentRoleMigrationPath = path.join(
+  projectRoot,
+  "database/migrations/0030_custom_panel_roles.sql",
+);
 
 type TestUserRole = "admin" | "client" | "employee" | "owner";
 
@@ -86,7 +90,7 @@ function runAdminQuery(sql: string): string {
   ).trim();
 }
 
-function applyRbacHardeningMigration(): void {
+function applyRbacHardeningMigration(pathToMigration = migrationPath): void {
   execFileSync(
     "psql",
     [
@@ -96,7 +100,7 @@ function applyRbacHardeningMigration(): void {
       "-v",
       "ON_ERROR_STOP=1",
       "-f",
-      migrationPath,
+      pathToMigration,
     ],
     {
       cwd: projectRoot,
@@ -348,6 +352,9 @@ after(async () => {
 
 test("0010 se puede reaplicar sin modificar migraciones historicas", () => {
   applyRbacHardeningMigration();
+  // La migración histórica reemplaza funciones compartidas. Restaurar el
+  // esquema vigente para las pruebas siguientes y las demás suites.
+  applyRbacHardeningMigration(currentRoleMigrationPath);
 });
 
 test("las consultas del catalogo RBAC no producen recursion", async () => {

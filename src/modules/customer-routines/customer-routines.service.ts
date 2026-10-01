@@ -649,6 +649,23 @@ export async function updateCustomerRoutine(
 
     const activatesRoutine = status === "active" && current.status !== "active";
     if (activatesRoutine) {
+      if (current.source === "system" && current.generation_version) {
+        const unresolved = await client.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM public.routine_details
+           WHERE routine_id = $1
+             AND block_type IN ('strength', 'accessory')
+             AND exercise_id IS NULL`,
+          [routineId],
+        );
+        if (Number(unresolved.rows[0]?.count ?? 0) > 0) {
+          throw new AppError(
+            409,
+            "ROUTINE_EXERCISES_INCOMPLETE",
+            "Reemplaza los ejercicios pendientes antes de aprobar la rutina",
+          );
+        }
+      }
       await archiveCurrentCustomerRoutines(client, customerId, routineId);
     }
 
@@ -812,7 +829,11 @@ export async function updateRoutineDetail(
           ? current.duration_minutes
           : input.duration_minutes,
         input.target_rir === undefined ? current.target_rir : input.target_rir,
-        input.notes === undefined ? current.notes : input.notes,
+        input.notes === undefined
+          ? input.exercise_id && current.notes === "No hay ejercicio compatible en el catálogo local."
+            ? null
+            : current.notes
+          : input.notes,
         exerciseNameSnapshot,
       ],
     );

@@ -116,6 +116,7 @@ test("GET /plans y GET /plans/:id devuelven el contrato local", async () => {
     (plan: { id: number }) => Number(plan.id) === planId,
   );
   assert.ok(listedPlan);
+  assert.equal(typeof listedPlan.id, "number");
   assert.equal(Number(listedPlan.price), 150);
   assert.equal(listedPlan.duration_days, 30);
 
@@ -123,6 +124,7 @@ test("GET /plans y GET /plans/:id devuelven el contrato local", async () => {
     .get(`/plans/${planId}`)
     .set("Cookie", cookie);
   assert.equal(detailResponse.status, 200);
+  assert.equal(typeof detailResponse.body.id, "number");
   assert.equal(Number(detailResponse.body.id), planId);
   assert.equal(detailResponse.body.description, "Descripción de prueba");
 });
@@ -169,6 +171,7 @@ test("administrador crea, edita y desactiva un plan sin perder historial", async
   assert.equal(created.body.name, name);
   assert.equal(created.body.price, 150.5);
   assert.equal(created.body.is_active, true);
+  assert.equal(typeof created.body.id, "number");
   const planId = Number(created.body.id);
 
   const updated = await request(app).put(`/plans/${planId}`).set("Cookie", cookie).send({
@@ -176,12 +179,14 @@ test("administrador crea, edita y desactiva un plan sin perder historial", async
     price: 175,
   });
   assert.equal(updated.status, 200);
+  assert.equal(typeof updated.body.id, "number");
   assert.equal(updated.body.description, null);
   assert.equal(updated.body.price, 175);
   assert.equal(updated.body.duration_days, 30);
 
   const deactivated = await request(app).delete(`/plans/${planId}`).set("Cookie", cookie);
   assert.equal(deactivated.status, 200);
+  assert.equal(typeof deactivated.body.id, "number");
   assert.equal(deactivated.body.is_active, false);
 
   const historical = await request(app).get(`/plans/${planId}`).set("Cookie", cookie);

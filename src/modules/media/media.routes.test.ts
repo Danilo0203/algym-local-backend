@@ -27,7 +27,14 @@ function adminSql(sql: string) {
   });
 }
 
-async function createUser(role: "owner" | "client") {
+function adminValue(sql: string) {
+  return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A", "-c", sql], {
+    cwd: projectRoot,
+    encoding: "utf8",
+  }).trim();
+}
+
+async function createUser(role: "owner" | "admin" | "employee" | "client") {
   const userId = randomUUID();
   const email = `${userId}${testEmailDomain}`;
   const hash = await bcrypt.hash(password, 10);
@@ -44,13 +51,18 @@ async function createUser(role: "owner" | "client") {
   assert.equal(response.status, 200);
   const cookie = response.headers["set-cookie"]?.[0];
   assert.ok(cookie);
-  return cookie;
+  return { userId, cookie };
 }
 
 after(async () => {
   if (previousMediaRoot === undefined) delete process.env.LOCAL_MEDIA_ROOT;
   else process.env.LOCAL_MEDIA_ROOT = previousMediaRoot;
   rmSync(mediaRoot, { recursive: true, force: true });
+  adminSql(`DELETE FROM public.routine_details WHERE routine_id IN
+    (SELECT id FROM public.routines WHERE name LIKE 'ZZTEST MEDIA%')`);
+  adminSql("DELETE FROM public.routines WHERE name LIKE 'ZZTEST MEDIA%'");
+  adminSql("DELETE FROM public.products WHERE name LIKE 'ZZTEST MEDIA%'");
+  adminSql("DELETE FROM public.exercises WHERE name LIKE 'ZZTEST MEDIA%'");
   adminSql(`DELETE FROM public.profiles
     WHERE id IN (SELECT id FROM auth.users WHERE email LIKE '%${testEmailDomain}')`);
   await pool.query(
@@ -62,8 +74,11 @@ after(async () => {
 });
 
 test("imágenes locales exigen sesión y permiso para subir, y conservan bytes", async () => {
-  const ownerCookie = await createUser("owner");
-  const clientCookie = await createUser("client");
+  const owner = await createUser("owner");
+  const admin = await createUser("admin");
+  const employee = await createUser("employee");
+  const client = await createUser("client");
+  const otherClient = await createUser("client");
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
     "base64",
@@ -71,10 +86,10 @@ test("imágenes locales exigen sesión y permiso para subir, y conservan bytes",
 
   const anonymous = await request(app).post("/media/exercises").set("Content-Type", "image/png").send(png);
   assert.equal(anonymous.status, 401);
-  const denied = await request(app).post("/media/exercises").set("Cookie", clientCookie).set("Content-Type", "image/png").send(png);
+  const denied = await request(app).post("/media/exercises").set("Cookie", client.cookie).set("Content-Type", "image/png").send(png);
   assert.equal(denied.status, 403);
 
-  const uploaded = await request(app).post("/media/exercises").set("Cookie", ownerCookie).set("Content-Type", "image/png").send(png);
+  const uploaded = await request(app).post("/media/exercises").set("Cookie", owner.cookie).set("Content-Type", "image/png").send(png);
   assert.equal(uploaded.status, 201);
   assert.match(uploaded.body.url, /^\/api\/media\/exercises\/[a-f0-9]{64}\.png$/);
   assert.equal(uploaded.body.bytes, png.length);
@@ -83,13 +98,43 @@ test("imágenes locales exigen sesión y permiso para subir, y conservan bytes",
   assert.ok(filename);
   const withoutSession = await request(app).get(`/media/exercises/${filename}`);
   assert.equal(withoutSession.status, 401);
-  const image = await request(app).get(`/media/exercises/${filename}`).set("Cookie", clientCookie);
+  assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", owner.cookie)).status, 404);
+  assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", client.cookie)).status, 403);
+
+  const exerciseId = Number(adminValue(`INSERT INTO public.exercises (name, image_url)
+    VALUES ('ZZTEST MEDIA ejercicio', '${uploaded.body.url}') RETURNING id`));
+  assert.ok(Number.isInteger(exerciseId) && exerciseId > 0);
+  const image = await request(app).get(`/media/exercises/${filename}`).set("Cookie", owner.cookie);
   assert.equal(image.status, 200);
   assert.match(String(image.headers["content-type"]), /^image\/png/);
   assert.deepEqual(image.body, png);
+  assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", employee.cookie)).status, 200);
+  assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", admin.cookie)).status, 403);
+  assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", client.cookie)).status, 403);
 
-  const invalid = await request(app).post("/media/exercises").set("Cookie", ownerCookie).set("Content-Type", "image/png").send(Buffer.from("no es imagen"));
+  const routineId = adminValue(`INSERT INTO public.routines (user_id, created_by, name, status, is_active)
+    VALUES ('${client.userId}', '${owner.userId}', 'ZZTEST MEDIA rutina', 'active', true) RETURNING id`);
+  adminSql(`INSERT INTO public.routine_details (routine_id, day_of_week, exercise_id)
+    VALUES ('${routineId}', 1, ${exerciseId})`);
+  const ownImage = await request(app).get(`/media/exercises/${filename}`).set("Cookie", client.cookie);
+  assert.equal(ownImage.status, 200);
+  assert.deepEqual(ownImage.body, png);
+  assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", otherClient.cookie)).status, 403);
+
+  const uploadedProduct = await request(app).post("/media/products")
+    .set("Cookie", owner.cookie).set("Content-Type", "image/png").send(png);
+  assert.equal(uploadedProduct.status, 201);
+  const productFilename = uploadedProduct.body.url.split("/").at(-1);
+  assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", owner.cookie)).status, 404);
+  adminSql(`INSERT INTO public.products (name, sale_price, image_url)
+    VALUES ('ZZTEST MEDIA producto', 10, '${uploadedProduct.body.url}')`);
+  assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", owner.cookie)).status, 200);
+  assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", admin.cookie)).status, 403);
+  assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", employee.cookie)).status, 403);
+  assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", client.cookie)).status, 403);
+
+  const invalid = await request(app).post("/media/exercises").set("Cookie", owner.cookie).set("Content-Type", "image/png").send(Buffer.from("no es imagen"));
   assert.equal(invalid.status, 400);
-  const wrongName = await request(app).get("/media/exercises/archivo.png").set("Cookie", ownerCookie);
+  const wrongName = await request(app).get("/media/exercises/archivo.png").set("Cookie", owner.cookie);
   assert.equal(wrongName.status, 400);
 });

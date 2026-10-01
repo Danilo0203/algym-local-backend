@@ -93,6 +93,37 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
   assert.equal(created.body.image_url, uploaded.body.url);
   const id = created.body.id;
 
+  const textOnlyName = `ZZTEST LOCAL EXERCISE SIN ARCHIVO ${randomUUID()}`;
+  const textOnly = await request(app).post("/exercises").set("Cookie", owner.cookie).send({
+    name: textOnlyName,
+    exercise_type: "strength",
+    body_parts: ["upper legs"],
+    target_muscles: ["quadriceps"],
+    equipments: ["dumbbell"],
+    instructions: ["Flexiona las rodillas con control."],
+    keywords: ["squat"],
+  });
+  assert.equal(textOnly.status, 201);
+  assert.equal(textOnly.body.image_url, null);
+  assert.deepEqual(textOnly.body.body_parts, ["upper legs"]);
+  assert.deepEqual(textOnly.body.target_muscles, ["quadriceps"]);
+  assert.deepEqual(textOnly.body.equipments, ["dumbbell"]);
+  assert.deepEqual(textOnly.body.instructions, ["Flexiona las rodillas con control."]);
+  const attachedImage = await request(app).patch(`/exercises/${textOnly.body.id}`).set("Cookie", owner.cookie).send({
+    imageUrl: uploaded.body.url,
+    originalFileName: "imagen-local.png",
+    target_muscles: ["quadriceps", "glutes"],
+    equipments: [],
+  });
+  assert.equal(attachedImage.status, 200);
+  assert.equal(attachedImage.body.image_url, uploaded.body.url);
+  assert.deepEqual(attachedImage.body.target_muscles, ["quadriceps", "glutes"]);
+  assert.deepEqual(attachedImage.body.equipments, []);
+  const remoteImage = await request(app).patch(`/exercises/${textOnly.body.id}`).set("Cookie", owner.cookie).send({
+    imageUrl: "https://example.invalid/exercise.png",
+  });
+  assert.equal(remoteImage.status, 400);
+
   const list = await request(app).get("/exercises").set("Cookie", owner.cookie);
   assert.equal(list.status, 200);
   assert.ok(list.body.data.some((item: { id: number }) => item.id === id));

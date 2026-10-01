@@ -60,6 +60,8 @@ before(() => {
 after(async () => {
   adminSql(`DELETE FROM public.cash_movements
     WHERE customer_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
+    DELETE FROM public.routines
+    WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.training_nutrition_snapshots
     WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.training_profiles
@@ -107,6 +109,7 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(noSession.body.error.code, "CASH_SESSION_REQUIRED");
   assert.equal(adminSql(`SELECT count(*) FROM public.subscriptions WHERE user_id = '${customer.id}'`), "0");
   assert.equal(adminSql(`SELECT count(*) FROM public.payments WHERE user_id = '${customer.id}'`), "0");
+  assert.equal(adminSql(`SELECT count(*) FROM public.routines WHERE user_id = '${customer.id}'`), "0");
 
   const newCustomerEmail = `paid-${randomUUID()}${domain}`;
   const paidCustomerInput = {
@@ -157,6 +160,22 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(adminSql(`SELECT amount_paid::text FROM public.payments WHERE id = '${created.body.payment_id}'`), "120.00");
   assert.equal(adminSql(`SELECT cash_effect_amount::text FROM public.cash_movements
     WHERE id = '${created.body.cash_movement_id}'`), "120.00");
+  assert.equal(adminSql(`SELECT count(*) FROM public.routines WHERE user_id = '${customer.id}'
+    AND status = 'pending_profile' AND source = 'system' AND created_by = '${employee.id}'`), "1");
+  await assert.rejects(
+    withUserTransaction(customer.id, (client) => client.query(
+      `SELECT private.create_pending_routine_for_cash_payment($1::uuid)`,
+      [created.body.payment_id],
+    )),
+    /No autorizado para preparar la rutina del cobro/,
+  );
+  await assert.rejects(
+    withUserTransaction(employee.id, (client) => client.query(
+      `SELECT private.create_pending_routine_for_cash_payment($1::uuid)`,
+      [randomUUID()],
+    )),
+    /No se encontró un cobro en caja válido/,
+  );
 
   const dashboard = await request(app).get("/cash/dashboard").set("Cookie", employee.cookie);
   assert.equal(dashboard.status, 200, JSON.stringify(dashboard.body));
@@ -180,6 +199,10 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   const afterRenewal = await request(app).get("/cash/dashboard").set("Cookie", employee.cookie);
   assert.equal(afterRenewal.body.summary.expectedAmount, 170);
   assert.equal(adminSql(`SELECT count(*) FROM public.payments WHERE user_id = '${customer.id}'`), "2");
+  assert.equal(adminSql(`SELECT count(*) FROM public.routines WHERE user_id = '${customer.id}'
+    AND status = 'pending_profile'`), "1");
+  assert.equal(adminSql(`SELECT count(*) FROM public.routines WHERE user_id = '${customer.id}'
+    AND status = 'archived'`), "1");
 
   const paidCustomer = await request(app).post("/customers")
     .set("Cookie", employee.cookie).send(paidCustomerInput);
@@ -189,12 +212,18 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
     WHERE user_id = '${paidCustomer.body.id}' AND status = 'posted'`), "1");
   assert.equal(adminSql(`SELECT count(*) FROM public.cash_movements
     WHERE customer_id = '${paidCustomer.body.id}' AND cash_session_id = '${opened.body.id}'`), "1");
+  assert.equal(adminSql(`SELECT count(*) FROM public.routines WHERE user_id = '${paidCustomer.body.id}'
+    AND status = 'pending_profile' AND created_by = '${employee.id}'`), "1");
   assert.equal(adminSql(`SELECT injuries_or_pain FROM public.customer_health_profiles
     WHERE user_id = '${paidCustomer.body.id}'`), "Molestia de rodilla");
   assert.equal(adminSql(`SELECT weight_kg FROM public.body_assessments
     WHERE user_id = '${paidCustomer.body.id}'`), "72.00");
   assert.equal(adminSql(`SELECT primary_goal FROM public.training_profiles
     WHERE user_id = '${paidCustomer.body.id}'`), "strength");
+  assert.equal(adminSql(`SELECT is_complete::text FROM public.training_profiles
+    WHERE user_id = '${paidCustomer.body.id}'`), "false");
+  assert.equal(adminSql(`SELECT training_profile_status FROM public.profiles
+    WHERE id = '${paidCustomer.body.id}'`), "pending");
   assert.equal(adminSql(`SELECT count(*) FROM public.training_nutrition_snapshots AS snapshot
     JOIN public.body_assessments AS assessment ON assessment.user_id = snapshot.user_id
     JOIN public.subscriptions AS subscription ON subscription.id = snapshot.subscription_id
@@ -202,6 +231,28 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
       AND snapshot.daily_calories = assessment.daily_calories
       AND snapshot.protein_grams = assessment.protein_grams
       AND subscription.plan_id = ${planId}`), "1");
+  const readyCustomer = await request(app).post("/customers")
+    .set("Cookie", employee.cookie).send({
+      ...paidCustomerInput,
+      email: `ready-${randomUUID()}${domain}`,
+      phone: "55551235",
+      intake: {
+        ...paidCustomerInput.intake,
+        training_profile: {
+          ...paidCustomerInput.intake.training_profile,
+          parq_requires_attention: false,
+          experience_level: "intermediate",
+          session_minutes: 60,
+          activity_level: "3_5_dias",
+          cardio_preference: "moderate",
+        },
+      },
+    });
+  assert.equal(readyCustomer.status, 201, JSON.stringify(readyCustomer.body));
+  assert.equal(adminSql(`SELECT is_complete::text FROM public.training_profiles
+    WHERE user_id = '${readyCustomer.body.id}'`), "true");
+  assert.equal(adminSql(`SELECT training_profile_status FROM public.profiles
+    WHERE id = '${readyCustomer.body.id}'`), "complete");
   await assert.rejects(
     withUserTransaction(employee.id, (client) => client.query(
       `INSERT INTO public.customer_health_profiles (user_id, injuries_or_pain)

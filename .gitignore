@@ -4,6 +4,8 @@ node_modules/
 # Compilación
 dist/
 build/
+__pycache__/
+*.pyc
 
 # Variables de entorno
 .env

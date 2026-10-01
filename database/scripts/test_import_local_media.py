@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Prueba el importador solo sobre algym_test y un directorio temporal."""
+
+from __future__ import annotations
+
+from argparse import Namespace
+import base64
+from dataclasses import replace
+import getpass
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+from database.scripts import import_local_media as importer
+
+
+SCRIPT = Path(__file__).with_name("import_local_media.py")
+EXPORTER = Path(__file__).with_name("export_media_inventory.py")
+PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII="
+)
+
+
+def psql(sql: str) -> str:
+    result = subprocess.run(
+        ["psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+         "--host", "127.0.0.1", "--dbname", "algym_test", "-c", sql],
+        capture_output=True, text=True, check=True,
+    )
+    return result.stdout.strip()
+
+
+class ImportLocalMediaTest(unittest.TestCase):
+    def test_dry_run_apply_and_stale_guard(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="algym-import-media-", dir="/private/tmp") as temporary:
+            root = Path(temporary)
+            media_root = root / "media"
+            media_root.mkdir()
+            source = root / "exercise.png"
+            source.write_bytes(PNG)
+            digest = hashlib.sha256(PNG).hexdigest()
+            exercise_id = psql(
+                "INSERT INTO public.exercises (name, image_url, animation_url) "
+                "VALUES ('ZZTEST IMPORT MEDIA ejercicio', 'https://old.example/exercise.png', "
+                "'https://old.example/animation.gif') RETURNING id"
+            )
+            product_id = psql(
+                "INSERT INTO public.products (name, sale_price, image_url) "
+                "VALUES ('ZZTEST IMPORT MEDIA producto', 10, 'https://old.example/product.png') RETURNING id"
+            )
+            try:
+                inventory = root / "inventory.json"
+                subprocess.run(["python3", str(EXPORTER), "--output", str(inventory)],
+                               capture_output=True, text=True, check=True)
+                exported = json.loads(inventory.read_text())["items"]
+                by_key = {(item["kind"], item["id"]): item for item in exported}
+                self.assertEqual(by_key[("exercises", exercise_id)]["expected_animation_url"],
+                                 "https://old.example/animation.gif")
+                self.assertEqual(by_key[("products", product_id)]["file"], "")
+                self.assertEqual(inventory.stat().st_mode & 0o777, 0o600)
+                duplicate_export = subprocess.run(
+                    ["python3", str(EXPORTER), "--output", str(inventory)],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(duplicate_export.returncode, 0)
+                self.assertEqual(json.loads(inventory.read_text())["items"], exported)
+
+                manifest = root / "manifest.json"
+                manifest.write_text(json.dumps({"version": 1, "items": [
+                    {"kind": "exercises", "id": exercise_id, "file": str(source),
+                     "expected_image_url": "https://old.example/exercise.png",
+                     "expected_animation_url": "https://old.example/animation.gif", "sha256": digest},
+                    {"kind": "products", "id": product_id, "file": str(source),
+                     "expected_image_url": "https://old.example/product.png", "sha256": digest},
+                ]}), encoding="utf-8")
+                command = ["python3", str(SCRIPT), str(manifest), "--media-root", str(media_root)]
+
+                dry = subprocess.run(command, capture_output=True, text=True, check=True)
+                self.assertIn("Validación sin escritura: 2", dry.stdout)
+                no_backup = subprocess.run(command + ["--db-name", "algym", "--apply"],
+                                           capture_output=True, text=True, check=False)
+                self.assertNotEqual(no_backup.returncode, 0)
+                self.assertIn("se requiere --backup", no_backup.stderr)
+                self.assertEqual(psql(f"SELECT image_url FROM public.exercises WHERE id = {exercise_id}"),
+                                 "https://old.example/exercise.png")
+                self.assertEqual(list(media_root.iterdir()), [])
+
+                applied = subprocess.run(command + ["--apply"], capture_output=True, text=True, check=True)
+                self.assertIn("Importados 2 registros y 2 archivos nuevos", applied.stdout)
+                expected_exercise_url = f"/api/media/exercises/{digest}.png"
+                expected_product_url = f"/api/media/products/{digest}.png"
+                self.assertEqual(psql(f"SELECT image_url || '|' || animation_url "
+                                      f"FROM public.exercises WHERE id = {exercise_id}"),
+                                 f"{expected_exercise_url}|{expected_exercise_url}")
+                self.assertEqual(psql(f"SELECT image_url FROM public.products WHERE id = '{product_id}'"),
+                                 expected_product_url)
+                self.assertEqual((media_root / "exercises" / f"{digest}.png").read_bytes(), PNG)
+                self.assertEqual((media_root / "products" / f"{digest}.png").read_bytes(), PNG)
+                inventory_after = root / "inventory-after.json"
+                subprocess.run(["python3", str(EXPORTER), "--output", str(inventory_after)],
+                               capture_output=True, text=True, check=True)
+                exported_after = json.loads(inventory_after.read_text())["items"]
+                self.assertNotIn(("exercises", exercise_id),
+                                 {(item["kind"], item["id"]) for item in exported_after})
+                self.assertNotIn(("products", product_id),
+                                 {(item["kind"], item["id"]) for item in exported_after})
+
+                items = importer.read_manifest(manifest)
+                first = replace(items[0], expected_image_url=expected_exercise_url,
+                                expected_animation_url=expected_exercise_url, digest="f" * 64)
+                second = replace(items[1], expected_image_url="https://wrong.example/product.png")
+                args = Namespace(db_mode="host", db_name="algym_test", db_host="127.0.0.1",
+                                 db_port=5432, db_user=getpass.getuser(), project_name=None)
+                with self.assertRaisesRegex(RuntimeError, "PostgreSQL rechazó"):
+                    importer.update_rows(args, [first, second])
+                self.assertEqual(psql(f"SELECT image_url FROM public.exercises WHERE id = {exercise_id}"),
+                                 expected_exercise_url)
+
+                stale = subprocess.run(command + ["--apply"], capture_output=True, text=True, check=False)
+                self.assertNotEqual(stale.returncode, 0)
+                self.assertIn("generar un manifiesto nuevo", stale.stderr)
+            finally:
+                psql(f"DELETE FROM public.exercises WHERE id = {exercise_id}")
+                psql(f"DELETE FROM public.products WHERE id = '{product_id}'")
+
+
+if __name__ == "__main__":
+    unittest.main()
