@@ -17,6 +17,9 @@ const domain = "@paid-membership.test.local";
 const password = "PaidMembershipTest123";
 const registerName = "ZZTEST PAID MEMBERSHIP REGISTER";
 const planName = "ZZTEST PAID MEMBERSHIP PLAN";
+const customRegisterName = "ZZTEST PAID MEMBERSHIP CUSTOM REGISTER";
+const customPlanName = "ZZTEST PAID MEMBERSHIP CUSTOM PLAN";
+const customRoleIds: string[] = [];
 
 function adminSql(sql: string): string {
   return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql], {
@@ -24,7 +27,7 @@ function adminSql(sql: string): string {
   }).trim();
 }
 
-async function createUser(role: "owner" | "admin" | "employee" | "client") {
+async function createUser(role: "owner" | "admin" | "employee" | "client" | "custom", panelRoleId?: string) {
   const id = randomUUID();
   const email = `${id}${domain}`;
   const hash = await bcrypt.hash(password, 10);
@@ -34,9 +37,10 @@ async function createUser(role: "owner" | "admin" | "employee" | "client") {
     [id, email, hash],
   );
   adminSql(`INSERT INTO public.profiles
-    (id, full_name, phone, birth_date, gender, role, biometric_id, is_active)
+    (id, full_name, phone, birth_date, gender, role, biometric_id, is_active, panel_role_id)
     VALUES ('${id}', 'ZZTEST PAID MEMBERSHIP ${role}', '55550000', DATE '1990-01-01',
-      'male', '${role}', ${Math.floor(Math.random() * 1000000)}, true)`);
+      'male', '${role}', ${Math.floor(Math.random() * 1000000)}, true,
+      ${panelRoleId ? `'${panelRoleId}'` : "NULL"})`);
   const login = await request(app).post("/auth/login").send({ email, password });
   assert.equal(login.status, 200);
   const cookie = login.headers["set-cookie"]?.[0];
@@ -59,7 +63,8 @@ before(() => {
 
 after(async () => {
   adminSql(`DELETE FROM public.cash_movements
-    WHERE customer_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
+    WHERE customer_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}')
+       OR created_by_user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.routines
     WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.training_nutrition_snapshots
@@ -76,10 +81,15 @@ after(async () => {
     WHERE user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
     DELETE FROM public.cash_sessions
     WHERE opened_by_user_id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
-    DELETE FROM public.cash_registers WHERE name = '${registerName}';
+    DELETE FROM public.cash_registers WHERE name IN ('${registerName}', '${customRegisterName}');
     DELETE FROM public.profiles
     WHERE id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');
-    DELETE FROM public.plans WHERE name = '${planName}';`);
+    DELETE FROM public.plans WHERE name IN ('${planName}', '${customPlanName}');
+    DELETE FROM public.role_permissions WHERE role_id IN
+      (SELECT id FROM public.roles WHERE id IN (${customRoleIds.length
+        ? customRoleIds.map((id) => `'${id}'`).join(",") : "NULL"}));
+    DELETE FROM public.roles WHERE id IN (${customRoleIds.length
+      ? customRoleIds.map((id) => `'${id}'`).join(",") : "NULL"});`);
   await pool.query(`DELETE FROM auth.sessions WHERE user_id IN
     (SELECT id FROM auth.users WHERE email LIKE $1)`, [`%${domain}`]);
   await pool.query("DELETE FROM auth.users WHERE email LIKE $1", [`%${domain}`]);
@@ -380,4 +390,66 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(adminCorrection.status, 201, JSON.stringify(adminCorrection.body));
   const adminDashboard = await request(app).get("/cash/dashboard").set("Cookie", admin.cookie);
   assert.equal(adminDashboard.body.summary.expectedAmount, 100);
+});
+
+test("rol personalizado opera su caja y cobra solo con ambos permisos", async () => {
+  const roleId = randomUUID();
+  customRoleIds.push(roleId);
+  adminSql(`INSERT INTO public.roles (id, slug, name, scope, is_system)
+    VALUES ('${roleId}', 'zz_cash_${roleId.slice(0, 8)}', 'ZZTEST Cajero limitado', 'panel', false);
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT '${roleId}', id FROM public.permissions WHERE key = 'cash.operate';`);
+  const cashier = await createUser("custom", roleId);
+  const customer = await createUser("client");
+  const registerId = adminSql(`INSERT INTO public.cash_registers (name, is_active)
+    VALUES ('${customRegisterName}', true) RETURNING id`);
+  const planId = Number(adminSql(`INSERT INTO public.plans
+    (name, duration_days, price, is_active)
+    VALUES ('${customPlanName}', 30, 125, true) RETURNING id`));
+  const input = {
+    customerId: customer.id, planId, operation: "create", startDate: "2026-10-01",
+    endDate: "2026-10-31", amountOriginal: 125, discountAmount: 5,
+    amountPaid: 120, paymentMethod: "cash", requireSession: true,
+  };
+
+  assert.equal((await request(app).get("/customers").set("Cookie", cashier.cookie)).status, 403);
+  assert.equal((await request(app).get("/payments").set("Cookie", cashier.cookie)).status, 403);
+  assert.equal((await request(app).post("/cash/registers/default")
+    .set("Cookie", cashier.cookie)).status, 403);
+  const opened = await request(app).post("/cash/sessions")
+    .set("Cookie", cashier.cookie).send({ registerId, openingAmount: 20 });
+  assert.equal(opened.status, 201, JSON.stringify(opened.body));
+  const movement = await request(app).post(`/cash/sessions/${opened.body.id}/movements`)
+    .set("Cookie", cashier.cookie)
+    .send({ movementType: "manual_income", amount: 3, note: "Ingreso de prueba" });
+  assert.equal(movement.status, 201, JSON.stringify(movement.body));
+  const denied = await request(app).post("/payments/membership")
+    .set("Cookie", cashier.cookie).send(input);
+  assert.equal(denied.status, 403, JSON.stringify(denied.body));
+  assert.equal(adminSql(`SELECT count(*) FROM public.payments WHERE user_id = '${customer.id}'`), "0");
+
+  adminSql(`INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT '${roleId}', id FROM public.permissions
+    WHERE key = 'customers.manage_membership';`);
+  const newLogin = await request(app).post("/auth/login")
+    .send({ email: `${cashier.id}${domain}`, password });
+  assert.equal(newLogin.status, 200);
+  const authorizedCookie = newLogin.headers["set-cookie"]?.[0];
+  assert.ok(authorizedCookie);
+  const paid = await request(app).post("/payments/membership")
+    .set("Cookie", authorizedCookie).send(input);
+  assert.equal(paid.status, 201, JSON.stringify(paid.body));
+  assert.equal(adminSql(`SELECT amount_paid::text FROM public.payments
+    WHERE id = '${paid.body.payment_id}'`), "120.00");
+  assert.equal(adminSql(`SELECT cash_effect_amount::text FROM public.cash_movements
+    WHERE id = '${paid.body.cash_movement_id}'`), "120.00");
+  assert.equal((await request(app).get("/customers")
+    .set("Cookie", authorizedCookie)).status, 403);
+  assert.equal((await request(app).get("/payments")
+    .set("Cookie", authorizedCookie)).status, 403);
+  assert.equal((await request(app).post(`/payments/${paid.body.payment_id}/reverse`)
+    .set("Cookie", authorizedCookie).send({
+      amountOriginal: 125, discountAmount: 5, amountPaid: 120,
+      paymentMethod: "cash", reason: "Sin permiso", sourceCategory: "membership",
+    })).status, 403);
 });
