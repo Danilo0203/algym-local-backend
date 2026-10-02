@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
-import { lockMediaFilename, readMedia } from "../media/media.service.js";
+import { discardNewMedia, lockMediaBytes, lockMediaFilename, readMedia, saveMedia } from "../media/media.service.js";
 import type {
   CreateProductInput, InventoryAdjustmentInput, InventoryMovementInput,
   InventoryMovementsQuery, ProductListQuery, UpdateProductInput,
@@ -103,33 +103,72 @@ async function assertMediaExists(client: PoolClient, imageUrl: string | null | u
   }
 }
 
+async function insertProductRow(client: PoolClient, actorUserId: string, input: CreateProductInput) {
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO public.products
+      (name, sku, barcode, cost_price, sale_price, is_active, image_url,
+       created_by_user_id, updated_by_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8) RETURNING id`,
+    [input.name, input.sku ?? null, input.barcode ?? null, input.costPrice,
+      input.salePrice, input.isActive, input.imageUrl ?? null, actorUserId],
+  );
+  const id = inserted.rows[0]!.id;
+  if (input.initialQuantity > 0) {
+    await client.query(
+      `INSERT INTO public.inventory_movements
+         (product_id, movement_type, quantity_delta, quantity_before, quantity_after,
+          unit_cost, created_by_user_id, note)
+       VALUES ($1, 'entry', $2, 0, $2, $3, $4, 'Stock inicial')`,
+      [id, input.initialQuantity, input.costPrice, actorUserId],
+    );
+  }
+  return { id };
+}
+
 export async function createProduct(actorUserId: string, input: CreateProductInput) {
   try {
     return await withUserTransaction(actorUserId, async (client) => {
       await requirePermission(client, "products.create");
       if (input.initialQuantity > 0) await requirePermission(client, "inventory.adjust");
       await assertMediaExists(client, input.imageUrl);
-      const inserted = await client.query<{ id: string }>(
-        `INSERT INTO public.products
-          (name, sku, barcode, cost_price, sale_price, is_active, image_url,
-           created_by_user_id, updated_by_user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8) RETURNING id`,
-        [input.name, input.sku ?? null, input.barcode ?? null, input.costPrice,
-          input.salePrice, input.isActive, input.imageUrl ?? null, actorUserId],
-      );
-      const id = inserted.rows[0]!.id;
-      if (input.initialQuantity > 0) {
-        await client.query(
-          `INSERT INTO public.inventory_movements
-             (product_id, movement_type, quantity_delta, quantity_before, quantity_after,
-              unit_cost, created_by_user_id, note)
-           VALUES ($1, 'entry', $2, 0, $2, $3, $4, 'Stock inicial')`,
-          [id, input.initialQuantity, input.costPrice, actorUserId],
-        );
-      }
-      return { id };
+      return insertProductRow(client, actorUserId, input);
     });
   } catch (error) { databaseError(error); }
+}
+
+export async function createProductWithImage(
+  actorUserId: string, input: Omit<CreateProductInput, "imageUrl">, bytes: Buffer,
+) {
+  try {
+    return await withUserTransaction(actorUserId, async (client) => {
+      await requirePermission(client, "products.create");
+      if (input.initialQuantity > 0) await requirePermission(client, "inventory.adjust");
+      await lockMediaBytes(client, "products", bytes);
+      let saved: Awaited<ReturnType<typeof saveMedia>> | undefined;
+      try {
+        saved = await saveMedia("products", bytes);
+        return await insertProductRow(client, actorUserId, { ...input, imageUrl: saved.url });
+      } catch (error) {
+        if (saved?.created) await discardNewMedia("products", saved.url.split("/").at(-1)!);
+        throw error;
+      }
+    });
+  } catch (error) { databaseError(error); }
+}
+
+async function updateProductRow(client: PoolClient, actorUserId: string, id: string, input: UpdateProductInput) {
+  const updated = await client.query<{ id: string }>(
+    `UPDATE public.products SET
+       name=$2, sku=$3, barcode=$4, cost_price=$5, sale_price=$6,
+       is_active=$7, image_url=CASE WHEN $8::boolean THEN $9 ELSE image_url END,
+       updated_by_user_id=$10
+     WHERE id=$1 RETURNING id`,
+    [id, input.name, input.sku ?? null, input.barcode ?? null,
+      input.costPrice, input.salePrice, input.isActive,
+      Object.hasOwn(input, "imageUrl"), input.imageUrl ?? null, actorUserId],
+  );
+  if (!updated.rows[0]) throw new AppError(404, "PRODUCT_NOT_FOUND", "Producto no encontrado");
+  return updated.rows[0];
 }
 
 export async function updateProduct(actorUserId: string, id: string, input: UpdateProductInput) {
@@ -137,18 +176,26 @@ export async function updateProduct(actorUserId: string, id: string, input: Upda
     return await withUserTransaction(actorUserId, async (client) => {
       await requirePermission(client, "products.update");
       await assertMediaExists(client, input.imageUrl);
-      const updated = await client.query<{ id: string }>(
-        `UPDATE public.products SET
-           name=$2, sku=$3, barcode=$4, cost_price=$5, sale_price=$6,
-           is_active=$7, image_url=CASE WHEN $8::boolean THEN $9 ELSE image_url END,
-           updated_by_user_id=$10
-         WHERE id=$1 RETURNING id`,
-        [id, input.name, input.sku ?? null, input.barcode ?? null,
-          input.costPrice, input.salePrice, input.isActive,
-          Object.hasOwn(input, "imageUrl"), input.imageUrl ?? null, actorUserId],
-      );
-      if (!updated.rows[0]) throw new AppError(404, "PRODUCT_NOT_FOUND", "Producto no encontrado");
-      return updated.rows[0];
+      return updateProductRow(client, actorUserId, id, input);
+    });
+  } catch (error) { databaseError(error); }
+}
+
+export async function updateProductWithImage(
+  actorUserId: string, id: string, input: Omit<UpdateProductInput, "imageUrl">, bytes: Buffer,
+) {
+  try {
+    return await withUserTransaction(actorUserId, async (client) => {
+      await requirePermission(client, "products.update");
+      await lockMediaBytes(client, "products", bytes);
+      let saved: Awaited<ReturnType<typeof saveMedia>> | undefined;
+      try {
+        saved = await saveMedia("products", bytes);
+        return await updateProductRow(client, actorUserId, id, { ...input, imageUrl: saved.url });
+      } catch (error) {
+        if (saved?.created) await discardNewMedia("products", saved.url.split("/").at(-1)!);
+        throw error;
+      }
     });
   } catch (error) { databaseError(error); }
 }

@@ -34,6 +34,24 @@ export const createProductSchema = z.object({
 }).strict();
 export const updateProductSchema = z.object(productFields).strict();
 
+const productImagePayload = { image_base64: z.string().min(1).max(7_000_000) };
+export const createProductWithImageSchema = createProductSchema.omit({ imageUrl: true })
+  .extend(productImagePayload).strict();
+export const updateProductWithImageSchema = updateProductSchema.omit({ imageUrl: true })
+  .extend(productImagePayload).strict();
+
+export function decodeProductImage(base64: string): Buffer {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0 || bytes.length > 5 * 1024 * 1024
+    || bytes.toString("base64") !== base64) {
+    throw new z.ZodError([{
+      code: "custom", path: ["image_base64"],
+      message: "La imagen debe estar codificada en base64 y medir como máximo 5 MB",
+    }]);
+  }
+  return bytes;
+}
+
 export const inventoryMovementSchema = z.object({
   movementType: z.enum(["entry", "manual_exit"]),
   quantity: quantity.positive(),

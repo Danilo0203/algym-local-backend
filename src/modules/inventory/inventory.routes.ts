@@ -3,13 +3,14 @@ import { Router } from "express";
 import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
 import {
-  createProductSchema, inventoryAdjustmentSchema, inventoryMovementSchema,
+  createProductSchema, createProductWithImageSchema, decodeProductImage,
+  inventoryAdjustmentSchema, inventoryMovementSchema,
   inventoryMovementsQuerySchema, productIdSchema, productListQuerySchema,
-  updateProductSchema,
+  updateProductSchema, updateProductWithImageSchema,
 } from "./inventory.schemas.js";
 import {
-  adjustStock, createProduct, deactivateProduct, listMovements, listProducts,
-  recordMovement, updateProduct,
+  adjustStock, createProduct, createProductWithImage, deactivateProduct,
+  listMovements, listProducts, recordMovement, updateProduct, updateProductWithImage,
 } from "./inventory.service.js";
 
 export const inventoryRouter = Router();
@@ -28,11 +29,32 @@ inventoryRouter.post("/products", async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
+inventoryRouter.post("/products/with-image", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const { image_base64, ...input } = createProductWithImageSchema.parse(request.body);
+    response.status(201).json(await createProductWithImage(
+      session.userId, input, decodeProductImage(image_base64),
+    ));
+  } catch (error) { next(error); }
+});
+
 inventoryRouter.put("/products/:id", async (request, response, next) => {
   try {
     const session = await validateSessionToken(readSessionTokenFromRequest(request));
     const id = productIdSchema.parse(request.params.id);
     response.status(200).json(await updateProduct(session.userId, id, updateProductSchema.parse(request.body)));
+  } catch (error) { next(error); }
+});
+
+inventoryRouter.put("/products/:id/with-image", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const id = productIdSchema.parse(request.params.id);
+    const { image_base64, ...input } = updateProductWithImageSchema.parse(request.body);
+    response.status(200).json(await updateProductWithImage(
+      session.userId, id, input, decodeProductImage(image_base64),
+    ));
   } catch (error) { next(error); }
 });
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -20,6 +20,7 @@ const mediaRoot = mkdtempSync(path.join(tmpdir(), "algym-inventory-test-"));
 const previousMediaRoot = process.env.LOCAL_MEDIA_ROOT;
 process.env.LOCAL_MEDIA_ROOT = mediaRoot;
 let productId: string | null = null;
+const coordinatedProductIds: string[] = [];
 
 function adminSql(sql: string): string {
   return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql], {
@@ -50,6 +51,10 @@ async function createActor(role: "owner" | "employee" | "client") {
 after(async () => {
   if (productId) adminSql(`DELETE FROM public.inventory_movements WHERE product_id = '${productId}';
     DELETE FROM public.products WHERE id = '${productId}';`);
+  for (const id of coordinatedProductIds) {
+    adminSql(`DELETE FROM public.inventory_movements WHERE product_id = '${id}';
+      DELETE FROM public.products WHERE id = '${id}';`);
+  }
   adminSql(`DELETE FROM public.role_permissions AS rp USING public.roles AS role,
       public.permissions AS permission
     WHERE rp.role_id = role.id AND rp.permission_id = permission.id
@@ -156,4 +161,67 @@ test("inventario local guarda imagen, producto y stock; empleados ajustan sin ed
   const inactive = await request(app).get("/inventory/products?isActive=false&name=ZINV-1")
     .set("Cookie", owner.cookie);
   assert.equal(inactive.body.total, 1);
+});
+
+test("alta y edición de productos vinculan imagen y fila en una petición", async () => {
+  const owner = await createActor("owner");
+  const client = await createActor("client");
+  const base = {
+    name: "ZZTEST PRODUCTO COORDINADO", sku: `ZIMG-${randomUUID().slice(0, 8)}`,
+    barcode: null, costPrice: 3, salePrice: 8, isActive: true, initialQuantity: 0,
+  };
+  const baseline = await request(app).post("/inventory/products")
+    .set("Cookie", owner.cookie).send(base);
+  assert.equal(baseline.status, 201, JSON.stringify(baseline.body));
+  coordinatedProductIds.push(baseline.body.id);
+
+  const gif = Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=", "base64");
+  const gifFilename = `${createHash("sha256").update(gif).digest("hex")}.gif`;
+  const gifPath = path.join(mediaRoot, "products", gifFilename);
+  const imageInput = { ...base, image_base64: gif.toString("base64") };
+  assert.equal((await request(app).post("/inventory/products/with-image")
+    .send(imageInput)).status, 401);
+  assert.equal((await request(app).post("/inventory/products/with-image")
+    .set("Cookie", client.cookie).send(imageInput)).status, 403);
+  assert.equal(existsSync(gifPath), false);
+
+  const duplicate = await request(app).post("/inventory/products/with-image")
+    .set("Cookie", owner.cookie).send(imageInput);
+  assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
+  assert.equal(existsSync(gifPath), false);
+
+  const createdSku = `ZIMG-${randomUUID().slice(0, 8)}`;
+  const created = await request(app).post("/inventory/products/with-image")
+    .set("Cookie", owner.cookie)
+    .send({ ...imageInput, sku: createdSku, initialQuantity: 2 });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  coordinatedProductIds.push(created.body.id);
+  assert.equal(existsSync(gifPath), true);
+  const listed = await request(app).get(`/inventory/products?name=${encodeURIComponent(base.name)}`)
+    .set("Cookie", owner.cookie);
+  const product = listed.body.data.find((row: { id: string }) => row.id === created.body.id);
+  assert.equal(product.image_url, `/api/media/products/${gifFilename}`);
+  assert.equal(product.stock_quantity, 2);
+  assert.deepEqual((await request(app).get(`/media/products/${gifFilename}`)
+    .set("Cookie", owner.cookie)).body, gif);
+
+  const gifAlt = Buffer.from(gif);
+  gifAlt.write("GIF87a", 0, "ascii");
+  const gifAltFilename = `${createHash("sha256").update(gifAlt).digest("hex")}.gif`;
+  const gifAltPath = path.join(mediaRoot, "products", gifAltFilename);
+  const { initialQuantity: _unused, ...editFields } = base;
+  const editInput = { ...editFields, sku: createdSku, image_base64: gifAlt.toString("base64") };
+  const missing = await request(app).put(`/inventory/products/${randomUUID()}/with-image`)
+    .set("Cookie", owner.cookie).send(editInput);
+  assert.equal(missing.status, 404, JSON.stringify(missing.body));
+  assert.equal(existsSync(gifAltPath), false);
+
+  const updated = await request(app).put(`/inventory/products/${created.body.id}/with-image`)
+    .set("Cookie", owner.cookie).send(editInput);
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.equal(existsSync(gifAltPath), true);
+  const missingReused = await request(app).put(`/inventory/products/${randomUUID()}/with-image`)
+    .set("Cookie", owner.cookie).send(editInput);
+  assert.equal(missingReused.status, 404);
+  assert.equal(existsSync(gifAltPath), true);
 });

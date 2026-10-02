@@ -65,9 +65,11 @@ app.use(
 app.use(cookieParser());
 
 // Una imagen de hasta 5 MB crece al codificarla en base64. El límite ampliado
-// se aplica únicamente a las dos operaciones que guardan imagen y fila juntas.
+// se aplica únicamente a las operaciones que guardan imagen y fila juntas.
 app.use("/exercises/with-image", express.json({ limit: "7mb" }));
 app.use("/exercises/image-attachment", express.json({ limit: "7mb" }));
+app.use("/inventory/products/with-image", express.json({ limit: "7mb" }));
+app.use(/^\/inventory\/products\/[^/]+\/with-image$/, express.json({ limit: "7mb" }));
 
 app.use(
   express.json({
