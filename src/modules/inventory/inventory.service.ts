@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
-import { readMedia } from "../media/media.service.js";
+import { lockMediaFilename, readMedia } from "../media/media.service.js";
 import type {
   CreateProductInput, InventoryAdjustmentInput, InventoryMovementInput,
   InventoryMovementsQuery, ProductListQuery, UpdateProductInput,
@@ -95,16 +95,20 @@ export async function listProducts(actorUserId: string, query: ProductListQuery)
   });
 }
 
-async function assertMediaExists(imageUrl: string | null | undefined) {
-  if (imageUrl) await readMedia("products", imageUrl.split("/").at(-1)!);
+async function assertMediaExists(client: PoolClient, imageUrl: string | null | undefined) {
+  if (imageUrl) {
+    const filename = imageUrl.split("/").at(-1)!;
+    await lockMediaFilename(client, "products", filename);
+    await readMedia("products", filename);
+  }
 }
 
 export async function createProduct(actorUserId: string, input: CreateProductInput) {
-  await assertMediaExists(input.imageUrl);
   try {
     return await withUserTransaction(actorUserId, async (client) => {
       await requirePermission(client, "products.create");
       if (input.initialQuantity > 0) await requirePermission(client, "inventory.adjust");
+      await assertMediaExists(client, input.imageUrl);
       const inserted = await client.query<{ id: string }>(
         `INSERT INTO public.products
           (name, sku, barcode, cost_price, sale_price, is_active, image_url,
@@ -129,10 +133,10 @@ export async function createProduct(actorUserId: string, input: CreateProductInp
 }
 
 export async function updateProduct(actorUserId: string, id: string, input: UpdateProductInput) {
-  await assertMediaExists(input.imageUrl);
   try {
     return await withUserTransaction(actorUserId, async (client) => {
       await requirePermission(client, "products.update");
+      await assertMediaExists(client, input.imageUrl);
       const updated = await client.query<{ id: string }>(
         `UPDATE public.products SET
            name=$2, sku=$3, barcode=$4, cost_price=$5, sale_price=$6,

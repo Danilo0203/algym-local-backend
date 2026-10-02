@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, open, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
@@ -10,6 +11,22 @@ export type MediaKind = "exercises" | "products";
 
 const maxImageBytes = 5 * 1024 * 1024;
 const filenamePattern = /^[a-f0-9]{64}\.(png|jpg|webp|gif)$/;
+
+export async function lockMediaFilename(client: PoolClient, kind: MediaKind, filename: string) {
+  if (!filenamePattern.test(filename)) {
+    throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");
+  }
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))", [
+    `local-media:${kind}:${filename}`,
+  ]);
+}
+
+export async function lockMediaBytes(client: PoolClient, kind: MediaKind, bytes: Buffer) {
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const extension = imageExtension(bytes);
+  if (!extension) throw new AppError(400, "INVALID_MEDIA", "Formato de imagen no permitido");
+  await lockMediaFilename(client, kind, `${digest}.${extension}`);
+}
 
 function mediaRoot() {
   return path.resolve(process.env.LOCAL_MEDIA_ROOT?.trim() || "data/media");
@@ -112,13 +129,30 @@ export async function saveMedia(kind: MediaKind, bytes: Buffer) {
   const destination = path.join(directory, filename);
   const temporary = path.join(directory, `.${randomUUID()}.tmp`);
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  let created = false;
   try {
     await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
-    await rename(temporary, destination);
+    try {
+      await link(temporary, destination);
+      created = true;
+    } catch (error) {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") {
+        throw error;
+      }
+      // Un hash existente se reutiliza solo si el archivo conserva su contenido.
+      await readMedia(kind, filename);
+    }
   } finally {
     await rm(temporary, { force: true });
   }
-  return { url: `/api/media/${kind}/${filename}`, sha256: digest, bytes: bytes.length };
+  return { url: `/api/media/${kind}/${filename}`, sha256: digest, bytes: bytes.length, created };
+}
+
+export async function discardNewMedia(kind: MediaKind, filename: string) {
+  if (!filenamePattern.test(filename)) {
+    throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");
+  }
+  await rm(path.join(mediaRoot(), kind, filename), { force: true });
 }
 
 export async function readMedia(kind: MediaKind, filename: string) {

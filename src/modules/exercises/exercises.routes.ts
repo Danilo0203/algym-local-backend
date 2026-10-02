@@ -2,8 +2,8 @@ import { Router } from "express";
 
 import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
-import { createExerciseSchema, exerciseIdSchema, updateExerciseSchema } from "./exercises.schemas.js";
-import { archiveStarterExercises, createExercise, listExercises, updateExercise } from "./exercises.service.js";
+import { attachExerciseImageSchema, createExerciseSchema, createExerciseWithImageSchema, decodeExerciseImage, exerciseIdSchema, updateExerciseSchema } from "./exercises.schemas.js";
+import { archiveStarterExercises, attachExerciseImage, createExercise, createExerciseWithImage, listExercises, updateExercise } from "./exercises.service.js";
 
 export const exercisesRouter = Router();
 
@@ -19,6 +19,26 @@ exercisesRouter.post("/", async (request, response, next) => {
     const session = await validateSessionToken(readSessionTokenFromRequest(request));
     const input = createExerciseSchema.parse(request.body);
     response.status(201).json(await createExercise(session.userId, input));
+  } catch (error) { next(error); }
+});
+
+exercisesRouter.post("/with-image", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const { image_base64, ...input } = createExerciseWithImageSchema.parse(request.body);
+    response.status(201).json(await createExerciseWithImage(
+      session.userId, input, decodeExerciseImage(image_base64),
+    ));
+  } catch (error) { next(error); }
+});
+
+exercisesRouter.post("/image-attachment", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const { exercise_id, image_base64, original_file_name } = attachExerciseImageSchema.parse(request.body);
+    response.status(200).json(await attachExerciseImage(
+      session.userId, exercise_id, original_file_name, decodeExerciseImage(image_base64),
+    ));
   } catch (error) { next(error); }
 });
 

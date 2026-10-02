@@ -2,8 +2,9 @@ import express, { Router } from "express";
 import { z } from "zod";
 
 import { AppError } from "../../errors/app-error.js";
+import { withUserTransaction } from "../../db/transaction.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
-import { readMedia, requireMediaReadPermission, requireMediaUploadPermission, saveMedia } from "./media.service.js";
+import { lockMediaBytes, readMedia, requireMediaReadPermission, requireMediaUploadPermission, saveMedia } from "./media.service.js";
 
 export const mediaRouter = Router();
 const mediaKindSchema = z.enum(["exercises", "products"]);
@@ -16,8 +17,11 @@ mediaRouter.post("/:kind", express.raw({ type: ["image/png", "image/jpeg", "imag
     if (!Buffer.isBuffer(request.body)) {
       throw new AppError(415, "UNSUPPORTED_MEDIA_TYPE", "Se requiere una imagen PNG, JPEG, WebP o GIF");
     }
-    const saved = await saveMedia(kind, request.body);
-    response.status(201).json(saved);
+    const saved = await withUserTransaction(session.userId, async (client) => {
+      await lockMediaBytes(client, kind, request.body);
+      return saveMedia(kind, request.body);
+    });
+    response.status(201).json({ url: saved.url, sha256: saved.sha256, bytes: saved.bytes });
   } catch (error) {
     next(error);
   }

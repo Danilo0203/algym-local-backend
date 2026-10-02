@@ -26,6 +26,34 @@ export const createExerciseSchema = z.object({
   message: "El nombre del archivo requiere una imagen local",
 });
 
+const exerciseImagePayload = {
+  image_base64: z.string().min(1).max(7_000_000),
+  original_file_name: z.string().max(255).optional(),
+};
+
+export const createExerciseWithImageSchema = z.object({
+  name: exerciseNameSchema,
+  ...exerciseMetadataFields,
+  ...exerciseImagePayload,
+}).strict();
+
+export const attachExerciseImageSchema = z.object({
+  exercise_id: exerciseIdSchema,
+  ...exerciseImagePayload,
+}).strict();
+
+export function decodeExerciseImage(base64: string): Buffer {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0 || bytes.length > 5 * 1024 * 1024
+    || bytes.toString("base64") !== base64) {
+    throw new z.ZodError([{
+      code: "custom", path: ["image_base64"],
+      message: "La imagen debe estar codificada en base64 y medir como máximo 5 MB",
+    }]);
+  }
+  return bytes;
+}
+
 export const updateExerciseSchema = z.object({
   displayName: exerciseNameSchema.optional(),
   isFavorite: z.boolean().optional(),
@@ -41,3 +69,5 @@ export const updateExerciseSchema = z.object({
 
 export type CreateExerciseInput = z.infer<typeof createExerciseSchema>;
 export type UpdateExerciseInput = z.infer<typeof updateExerciseSchema>;
+export type CreateExerciseWithImageInput = z.infer<typeof createExerciseWithImageSchema>;
+export type AttachExerciseImageInput = z.infer<typeof attachExerciseImageSchema>;

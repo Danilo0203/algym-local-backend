@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
+import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
-import { readMedia } from "../media/media.service.js";
-import type { CreateExerciseInput, UpdateExerciseInput } from "./exercises.schemas.js";
+import { discardNewMedia, lockMediaBytes, lockMediaFilename, readMedia, saveMedia } from "../media/media.service.js";
+import type { CreateExerciseInput, CreateExerciseWithImageInput, UpdateExerciseInput } from "./exercises.schemas.js";
 
 type ExerciseRow = {
   id: string;
@@ -50,10 +51,7 @@ function toExercise(row: ExerciseRow) {
   };
 }
 
-async function requirePermission(
-  client: import("pg").PoolClient,
-  permission: string,
-) {
+async function requirePermission(client: PoolClient, permission: string) {
   const result = await client.query<{ permissions: string[] | null; is_owner: boolean }>(
     "SELECT public.get_current_permissions() AS permissions, public.is_owner() AS is_owner",
   );
@@ -81,39 +79,63 @@ export async function listExercises(actorUserId: string) {
   });
 }
 
+async function insertExerciseRow(client: PoolClient, input: CreateExerciseInput) {
+  const filename = input.image_url?.split("/").at(-1);
+  const baseSlug = input.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "exercise";
+  const slug = `${baseSlug}-${randomBytes(4).toString("hex")}`;
+  const result = await client.query<ExerciseRow>(
+    `INSERT INTO public.exercises
+      (slug, name, display_name, provider, exercise_type, image_url, animation_url,
+       body_parts, target_muscles, secondary_muscles, equipments, instructions, keywords,
+       raw_payload, last_synced_at, is_active)
+     VALUES ($1, $2, $2, 'custom_local', $6, $3, $3,
+             $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[],
+             jsonb_build_object('source', $4::text, 'original_file_name', $5::text),
+             now(), true)
+     RETURNING ${columns}`,
+    [slug, input.name, input.image_url ?? null, filename ? "manual_upload" : "manual_entry",
+      input.original_file_name ?? null, input.exercise_type ?? "strength",
+      input.body_parts ?? [], input.target_muscles ?? [], input.secondary_muscles ?? [],
+      input.equipments ?? [], input.instructions ?? [], input.keywords ?? []],
+  );
+  return toExercise(result.rows[0]!);
+}
+
 export async function createExercise(actorUserId: string, input: CreateExerciseInput) {
   const filename = input.image_url?.split("/").at(-1);
   return withUserTransaction(actorUserId, async (client) => {
     await requirePermission(client, "exercises.create");
-    if (filename) await readMedia("exercises", filename);
-    const baseSlug = input.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "exercise";
-    const slug = `${baseSlug}-${randomBytes(4).toString("hex")}`;
-    const result = await client.query<ExerciseRow>(
-      `INSERT INTO public.exercises
-        (slug, name, display_name, provider, exercise_type, image_url, animation_url,
-         body_parts, target_muscles, secondary_muscles, equipments, instructions, keywords,
-         raw_payload, last_synced_at, is_active)
-       VALUES ($1, $2, $2, 'custom_local', $6, $3, $3,
-               $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[],
-               jsonb_build_object('source', $4::text, 'original_file_name', $5::text),
-               now(), true)
-       RETURNING ${columns}`,
-      [slug, input.name, input.image_url ?? null, filename ? "manual_upload" : "manual_entry",
-        input.original_file_name ?? null, input.exercise_type ?? "strength",
-        input.body_parts ?? [], input.target_muscles ?? [], input.secondary_muscles ?? [],
-        input.equipments ?? [], input.instructions ?? [], input.keywords ?? []],
-    );
-    return toExercise(result.rows[0]!);
+    if (filename) {
+      await lockMediaFilename(client, "exercises", filename);
+      await readMedia("exercises", filename);
+    }
+    return insertExerciseRow(client, input);
   });
 }
 
-export async function updateExercise(actorUserId: string, id: number, input: UpdateExerciseInput) {
+export async function createExerciseWithImage(
+  actorUserId: string, input: Omit<CreateExerciseWithImageInput, "image_base64">, bytes: Buffer,
+) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requirePermission(client, "exercises.update");
-    if (input.imageUrl) await readMedia("exercises", input.imageUrl.split("/").at(-1)!);
-    const result = await client.query<ExerciseRow>(
-      `UPDATE public.exercises
+    await requirePermission(client, "exercises.create");
+    await lockMediaBytes(client, "exercises", bytes);
+    let saved: Awaited<ReturnType<typeof saveMedia>> | undefined;
+    try {
+      saved = await saveMedia("exercises", bytes);
+      return await insertExerciseRow(client, {
+        ...input, image_url: saved.url,
+      });
+    } catch (error) {
+      if (saved?.created) await discardNewMedia("exercises", saved.url.split("/").at(-1)!);
+      throw error;
+    }
+  });
+}
+
+async function updateExerciseRow(client: PoolClient, id: number, input: UpdateExerciseInput) {
+  const result = await client.query<ExerciseRow>(
+    `UPDATE public.exercises
        SET name = COALESCE($2, name),
            display_name = COALESCE($2, display_name),
            is_favorite = COALESCE($3, is_favorite),
@@ -134,19 +156,49 @@ export async function updateExercise(actorUserId: string, id: number, input: Upd
        WHERE id = $1
        RETURNING ${columns}`,
       [id, input.displayName ?? null, input.isFavorite ?? null, input.isPreviewHidden ?? null,
-        input.imageUrl ?? null, input.originalFileName ?? null, input.body_parts ?? null,
-        input.target_muscles ?? null, input.secondary_muscles ?? null, input.equipments ?? null,
-        input.exercise_type ?? null, input.instructions ?? null, input.keywords ?? null],
+      input.imageUrl ?? null, input.originalFileName ?? null, input.body_parts ?? null,
+      input.target_muscles ?? null, input.secondary_muscles ?? null, input.equipments ?? null,
+      input.exercise_type ?? null, input.instructions ?? null, input.keywords ?? null],
+  );
+  const exercise = result.rows[0];
+  if (!exercise) throw new AppError(404, "EXERCISE_NOT_FOUND", "Ejercicio no encontrado");
+  if (input.displayName) {
+    await client.query(
+      "UPDATE public.routine_details SET exercise_name_snapshot = $2 WHERE exercise_id = $1",
+      [id, input.displayName],
     );
-    const exercise = result.rows[0];
-    if (!exercise) throw new AppError(404, "EXERCISE_NOT_FOUND", "Ejercicio no encontrado");
-    if (input.displayName) {
-      await client.query(
-        "UPDATE public.routine_details SET exercise_name_snapshot = $2 WHERE exercise_id = $1",
-        [id, input.displayName],
-      );
+  }
+  return toExercise(exercise);
+}
+
+export async function updateExercise(actorUserId: string, id: number, input: UpdateExerciseInput) {
+  return withUserTransaction(actorUserId, async (client) => {
+    await requirePermission(client, "exercises.update");
+    if (input.imageUrl) {
+      const filename = input.imageUrl.split("/").at(-1)!;
+      await lockMediaFilename(client, "exercises", filename);
+      await readMedia("exercises", filename);
     }
-    return toExercise(exercise);
+    return updateExerciseRow(client, id, input);
+  });
+}
+
+export async function attachExerciseImage(
+  actorUserId: string, id: number, originalFileName: string | undefined, bytes: Buffer,
+) {
+  return withUserTransaction(actorUserId, async (client) => {
+    await requirePermission(client, "exercises.update");
+    await lockMediaBytes(client, "exercises", bytes);
+    let saved: Awaited<ReturnType<typeof saveMedia>> | undefined;
+    try {
+      saved = await saveMedia("exercises", bytes);
+      return await updateExerciseRow(client, id, {
+        imageUrl: saved.url, originalFileName,
+      });
+    } catch (error) {
+      if (saved?.created) await discardNewMedia("exercises", saved.url.split("/").at(-1)!);
+      throw error;
+    }
   });
 }
 

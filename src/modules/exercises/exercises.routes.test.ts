@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -166,4 +166,69 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
     image_url: `/api/media/exercises/${"0".repeat(64)}.png`,
   });
   assert.equal(missingMedia.status, 404);
+});
+
+test("alta y adjunto de imagen coordinan archivo y fila, incluso si falla PostgreSQL", async () => {
+  const owner = await createUser("owner");
+  const client = await createUser("client");
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+  const gifAlt = Buffer.from(gif);
+  gifAlt[13] = 1; // Otro color de la paleta; sigue siendo un GIF de 1 × 1 válido.
+  const pngFilename = `${createHash("sha256").update(png).digest("hex")}.png`;
+  const gifFilename = `${createHash("sha256").update(gif).digest("hex")}.gif`;
+  const gifAltFilename = `${createHash("sha256").update(gifAlt).digest("hex")}.gif`;
+  const pngPath = path.join(mediaRoot, "exercises", pngFilename);
+  const gifPath = path.join(mediaRoot, "exercises", gifFilename);
+  const gifAltPath = path.join(mediaRoot, "exercises", gifAltFilename);
+  const name = `ZZTEST LOCAL EXERCISE ATOMICO ${randomUUID()}`;
+  const payload = { name, image_base64: gif.toString("base64"), original_file_name: "uno.gif" };
+
+  assert.equal((await request(app).post("/exercises/with-image").send(payload)).status, 401);
+  assert.equal((await request(app).post("/exercises/with-image")
+    .set("Cookie", client.cookie).send(payload)).status, 403);
+  assert.equal(existsSync(gifPath), false);
+
+  const created = await request(app).post("/exercises/with-image")
+    .set("Cookie", owner.cookie).send(payload);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.image_url, `/api/media/exercises/${gifFilename}`);
+  assert.equal(existsSync(gifPath), true);
+  assert.deepEqual((await request(app).get(`/media/exercises/${gifFilename}`)
+    .set("Cookie", owner.cookie)).body, gif);
+
+  const rejectedName = "ZZTEST LOCAL EXERCISE RECHAZADO";
+  adminSql(`ALTER TABLE public.exercises ADD CONSTRAINT zz_exercise_image_failure
+    CHECK (name <> '${rejectedName}')`);
+  try {
+    const failedNewFile = await request(app).post("/exercises/with-image")
+      .set("Cookie", owner.cookie)
+      .send({ name: rejectedName, image_base64: gifAlt.toString("base64") });
+    assert.equal(failedNewFile.status, 500);
+    assert.equal(existsSync(gifAltPath), false);
+    const failedReusedFile = await request(app).post("/exercises/with-image")
+      .set("Cookie", owner.cookie)
+      .send({ name: rejectedName, image_base64: png.toString("base64") });
+    assert.equal(failedReusedFile.status, 500);
+    assert.equal(existsSync(pngPath), true);
+  } finally {
+    adminSql("ALTER TABLE public.exercises DROP CONSTRAINT zz_exercise_image_failure");
+  }
+
+  const missing = await request(app).post("/exercises/image-attachment")
+    .set("Cookie", owner.cookie)
+    .send({ exercise_id: 999999999, image_base64: gifAlt.toString("base64") });
+  assert.equal(missing.status, 404, JSON.stringify(missing.body));
+  assert.equal(existsSync(gifAltPath), false);
+  const attached = await request(app).post("/exercises/image-attachment")
+    .set("Cookie", owner.cookie)
+    .send({ exercise_id: created.body.id, image_base64: gifAlt.toString("base64") });
+  assert.equal(attached.status, 200, JSON.stringify(attached.body));
+  assert.equal(attached.body.image_url, `/api/media/exercises/${gifAltFilename}`);
+  assert.equal(existsSync(gifAltPath), true);
+  assert.deepEqual((await request(app).get(`/media/exercises/${gifAltFilename}`)
+    .set("Cookie", owner.cookie)).body, gifAlt);
 });
