@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -37,6 +38,11 @@ class MediaItem:
     data: bytes
     digest: str
     extension: str
+    animation_source: Path | None = None
+    animation_data: bytes | None = None
+    animation_digest: str | None = None
+    animation_extension: str | None = None
+    animation_clear: bool = False
 
     @property
     def filename(self) -> str:
@@ -45,6 +51,14 @@ class MediaItem:
     @property
     def url(self) -> str:
         return f"/api/media/{self.kind}/{self.filename}"
+
+    @property
+    def animation_url(self) -> str | None:
+        if self.kind != "exercises" or self.animation_clear:
+            return None
+        if self.animation_digest is not None:
+            return f"/api/media/exercises/{self.animation_digest}.{self.animation_extension}"
+        return self.url if self.expected_animation_url is not None else None
 
 
 def image_extension(data: bytes) -> str:
@@ -57,6 +71,39 @@ def image_extension(data: bytes) -> str:
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP" and len(data) >= 16:
         return "webp"
     raise ValueError("El archivo no es PNG, JPEG, GIF ni WebP")
+
+
+def read_image_file(value: object, expected_digest: object, index: int,
+                    field: str) -> tuple[Path, bytes, str, str]:
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ValueError(f"Elemento {index}: {field} debe ser ruta absoluta")
+    source = Path(value)
+    info = source.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"Elemento {index}: {field} inexistente o enlace simbólico")
+    if info.st_size == 0 or info.st_size > MAX_BYTES:
+        raise ValueError(f"Elemento {index}: {field} fuera del límite de 5 MB")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(source, flags), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_dev != info.st_dev
+                or opened.st_ino != info.st_ino or opened.st_size != info.st_size
+                or opened.st_mtime_ns != info.st_mtime_ns):
+            raise ValueError(f"Elemento {index}: {field} cambió durante la lectura")
+        data = stream.read(MAX_BYTES + 1)
+        finished = os.fstat(stream.fileno())
+    if (len(data) != info.st_size or finished.st_size != info.st_size
+            or finished.st_mtime_ns != opened.st_mtime_ns):
+        raise ValueError(f"Elemento {index}: {field} cambió durante la lectura")
+    extension = image_extension(data)
+    digest = hashlib.sha256(data).hexdigest()
+    if expected_digest is not None and (
+        not isinstance(expected_digest, str)
+        or not SHA256_PATTERN.fullmatch(expected_digest)
+        or expected_digest != digest
+    ):
+        raise ValueError(f"Elemento {index}: SHA-256 incorrecto para {field}")
+    return source, data, digest, extension
 
 
 def read_manifest(path: Path) -> list[MediaItem]:
@@ -92,29 +139,33 @@ def read_manifest(path: Path) -> list[MediaItem]:
             or not isinstance(row["expected_animation_url"], (str, type(None)))
         ):
             raise ValueError(f"Elemento {index}: falta expected_animation_url")
-        source_value = row.get("file")
-        if not isinstance(source_value, str) or not source_value.startswith("/"):
-            raise ValueError(f"Elemento {index}: file debe ser ruta absoluta")
-        source = Path(source_value)
-        if source.is_symlink() or not source.is_file():
-            raise ValueError(f"Elemento {index}: archivo inexistente o enlace simbólico")
-        if source.stat().st_size == 0 or source.stat().st_size > MAX_BYTES:
-            raise ValueError(f"Elemento {index}: tamaño fuera del límite de 5 MB")
-        data = source.read_bytes()
-        if not data or len(data) > MAX_BYTES:
-            raise ValueError(f"Elemento {index}: archivo vacío o demasiado grande")
-        extension = image_extension(data)
-        digest = hashlib.sha256(data).hexdigest()
-        expected_digest = row.get("sha256")
-        if expected_digest is not None and (
-            not isinstance(expected_digest, str)
-            or not SHA256_PATTERN.fullmatch(expected_digest)
-            or expected_digest != digest
-        ):
-            raise ValueError(f"Elemento {index}: SHA-256 incorrecto")
+        source, data, digest, extension = read_image_file(
+            row.get("file"), row.get("sha256"), index, "file")
+        animation_source = animation_data = animation_digest = animation_extension = None
+        animation_clear = False
+        if kind == "exercises":
+            if "animation_sha256" in row and "animation_file" not in row:
+                raise ValueError(f"Elemento {index}: animation_sha256 requiere animation_file")
+            if "animation_file" in row:
+                if row["animation_file"] is None:
+                    if "animation_sha256" in row:
+                        raise ValueError(f"Elemento {index}: no se admite SHA-256 al limpiar animation_url")
+                    animation_clear = True
+                else:
+                    (animation_source, animation_data, animation_digest,
+                     animation_extension) = read_image_file(
+                        row["animation_file"], row.get("animation_sha256"),
+                        index, "animation_file")
+            elif row["expected_animation_url"] not in (None, row["expected_image_url"]):
+                raise ValueError(
+                    f"Elemento {index}: la animación histórica es distinta; indicar animation_file o null")
+        elif "animation_file" in row or "animation_sha256" in row:
+            raise ValueError(f"Elemento {index}: un producto no admite animation_file")
         items.append(MediaItem(
             kind, entity_id, source, row["expected_image_url"],
             row.get("expected_animation_url"), data, digest, extension,
+            animation_source, animation_data, animation_digest, animation_extension,
+            animation_clear,
         ))
     return items
 
@@ -226,25 +277,31 @@ def verify_backup(path: Path) -> None:
 def store_files(media_root: Path, items: list[MediaItem]) -> int:
     if media_root.is_symlink() or not media_root.is_dir():
         raise ValueError("LOCAL_MEDIA_ROOT debe ser un directorio existente sin enlace simbólico")
-    missing: list[tuple[MediaItem, Path]] = []
+    assets: dict[tuple[str, str], tuple[bytes, str]] = {}
     for item in items:
-        directory = media_root / item.kind
+        assets[(item.kind, item.filename)] = (item.data, item.digest)
+        if item.animation_data is not None and item.animation_digest is not None:
+            animation_filename = f"{item.animation_digest}.{item.animation_extension}"
+            assets[(item.kind, animation_filename)] = (item.animation_data, item.animation_digest)
+    missing: list[tuple[bytes, Path]] = []
+    for (kind, filename), (data, digest) in assets.items():
+        directory = media_root / kind
         if directory.is_symlink():
             raise ValueError(f"Directorio de media con enlace simbólico: {directory}")
         directory.mkdir(mode=0o700, exist_ok=True)
-        destination = directory / item.filename
+        destination = directory / filename
         if destination.is_symlink():
             raise ValueError(f"Archivo de destino con enlace simbólico: {destination}")
         if destination.exists():
-            if destination.stat().st_size > MAX_BYTES or hashlib.sha256(destination.read_bytes()).hexdigest() != item.digest:
+            if destination.stat().st_size > MAX_BYTES or hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
                 raise ValueError(f"Archivo existente con hash incorrecto: {destination}")
             continue
-        missing.append((item, destination))
+        missing.append((data, destination))
     created = 0
-    for item, destination in missing:
+    for data, destination in missing:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         with os.fdopen(os.open(destination, flags, 0o600), "wb") as output:
-            output.write(item.data)
+            output.write(data)
             output.flush()
             os.fsync(output.fileno())
         created += 1
@@ -257,10 +314,11 @@ def update_rows(args: argparse.Namespace, items: list[MediaItem]) -> None:
     for item in items:
         if item.kind == "exercises":
             statements.append(
-                "UPDATE public.exercises SET image_url = {url}, animation_url = {url} "
+                "UPDATE public.exercises SET image_url = {url}, animation_url = {animation_url} "
                 "WHERE id = {id}::bigint AND image_url IS NOT DISTINCT FROM {old_image} "
                 "AND animation_url IS NOT DISTINCT FROM {old_animation};".format(
-                    url=sql_literal(item.url), id=sql_literal(item.entity_id),
+                    url=sql_literal(item.url), animation_url=sql_literal(item.animation_url),
+                    id=sql_literal(item.entity_id),
                     old_image=sql_literal(item.expected_image_url),
                     old_animation=sql_literal(item.expected_animation_url),
                 )
@@ -286,7 +344,7 @@ def verify_imported_rows(args: argparse.Namespace, items: list[MediaItem]) -> No
     for item in items:
         row = rows.get((item.kind, item.entity_id.lower()))
         if row is None or row["image_url"] != item.url or (
-            item.kind == "exercises" and row["animation_url"] != item.url
+            item.kind == "exercises" and row["animation_url"] != item.animation_url
         ):
             raise RuntimeError(f"No se confirmó la URL local de {item.kind}/{item.entity_id}")
 
@@ -332,13 +390,18 @@ def main() -> None:
             raise
         verify_imported_rows(args, items)
         for item in items:
-            destination = media_root / item.kind / item.filename
-            if not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdigest() != item.digest:
-                raise RuntimeError(f"No se confirmó el archivo de {item.kind}/{item.entity_id}")
+            files = [(item.filename, item.digest)]
+            if item.animation_digest is not None:
+                files.append((f"{item.animation_digest}.{item.animation_extension}", item.animation_digest))
+            for filename, digest in files:
+                destination = media_root / item.kind / filename
+                if not destination.is_file() or hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                    raise RuntimeError(f"No se confirmó el archivo de {item.kind}/{item.entity_id}")
         print(f"Importados {len(items)} registros y {created} archivos nuevos en {args.db_name}")
     else:
         for item in items:
-            print(f"{item.kind}/{item.entity_id}: {item.url} sha256={item.digest}")
+            print(f"{item.kind}/{item.entity_id}: imagen={item.url} animación={item.animation_url} "
+                  f"sha256={item.digest}")
         print(f"Validación sin escritura: {len(items)} registros de {args.db_name}")
 
 

@@ -121,6 +121,25 @@ test("imágenes locales exigen sesión y permiso para subir, y conservan bytes",
   assert.deepEqual(ownImage.body, png);
   assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", otherClient.cookie)).status, 403);
 
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+  const uploadedAnimation = await request(app).post("/media/exercises")
+    .set("Cookie", owner.cookie).set("Content-Type", "image/gif").send(gif);
+  assert.equal(uploadedAnimation.status, 201);
+  const animationFilename = uploadedAnimation.body.url.split("/").at(-1);
+  assert.ok(animationFilename);
+  assert.equal((await request(app).get(`/media/exercises/${animationFilename}`)
+    .set("Cookie", owner.cookie)).status, 404);
+  adminSql(`UPDATE public.exercises SET animation_url = '${uploadedAnimation.body.url}' WHERE id = ${exerciseId}`);
+  const ownAnimation = await request(app).get(`/media/exercises/${animationFilename}`)
+    .set("Cookie", client.cookie);
+  assert.equal(ownAnimation.status, 200);
+  assert.match(String(ownAnimation.headers["content-type"]), /^image\/gif/);
+  assert.deepEqual(ownAnimation.body, gif);
+  assert.equal((await request(app).get(`/media/exercises/${animationFilename}`)
+    .set("Cookie", owner.cookie)).status, 200);
+  assert.equal((await request(app).get(`/media/exercises/${animationFilename}`)
+    .set("Cookie", otherClient.cookie)).status, 403);
+
   const uploadedProduct = await request(app).post("/media/products")
     .set("Cookie", owner.cookie).set("Content-Type", "image/png").send(png);
   assert.equal(uploadedProduct.status, 201);

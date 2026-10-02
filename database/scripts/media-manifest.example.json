@@ -6,7 +6,8 @@
       "id": "123",
       "expected_image_url": null,
       "expected_animation_url": null,
-      "file": "/ruta/absoluta/imagenes/ejercicio.png"
+      "file": "/ruta/absoluta/imagenes/ejercicio.png",
+      "animation_file": "/ruta/absoluta/imagenes/ejercicio-animado.gif"
     },
     {
       "kind": "products",

@@ -77,7 +77,7 @@ export async function requireMediaReadPermission(actorUserId: string, kind: Medi
          FROM public.exercises AS exercise
          JOIN public.routine_details AS detail ON detail.exercise_id = exercise.id
          JOIN public.routines AS routine ON routine.id = detail.routine_id
-         WHERE exercise.image_url = $1
+         WHERE (exercise.image_url = $1 OR exercise.animation_url = $1)
            AND routine.user_id = $2
            AND routine.status = 'active'
            AND routine.is_active = true
@@ -91,7 +91,10 @@ export async function requireMediaReadPermission(actorUserId: string, kind: Medi
     }
 
     const table = kind === "exercises" ? "public.exercises" : "public.products";
-    const referenced = await client.query(`SELECT 1 FROM ${table} WHERE image_url = $1 LIMIT 1`, [url]);
+    const predicate = kind === "exercises"
+      ? "image_url = $1 OR animation_url = $1"
+      : "image_url = $1";
+    const referenced = await client.query(`SELECT 1 FROM ${table} WHERE ${predicate} LIMIT 1`, [url]);
     if (!referenced.rows[0]) throw new AppError(404, "MEDIA_NOT_FOUND", "Imagen no encontrada");
   });
 }

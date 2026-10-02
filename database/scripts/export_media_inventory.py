@@ -70,6 +70,8 @@ def main() -> None:
                 "expected_image_url": row["image_url"], "file": ""}
         if kind == "exercises":
             item["expected_animation_url"] = row["animation_url"]
+            if row["animation_url"] not in (None, row["image_url"]):
+                item["animation_file"] = ""
         items.append(item)
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
