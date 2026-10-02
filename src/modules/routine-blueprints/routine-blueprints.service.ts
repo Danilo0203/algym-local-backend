@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { localAvatarUrl } from "../media/media.service.js";
 import type { CreateBlueprintInput } from "./routine-blueprints.schemas.js";
 
 type BlueprintRow = {
@@ -131,7 +132,7 @@ export async function listBlueprints(actorUserId: string) {
       day_count: Number(row.day_count),
       exercise_count: Number(row.exercise_count),
       assignment_count: Number(row.assignment_count),
-      preview_users: row.preview_users,
+      preview_users: row.preview_users.map((user) => ({ ...user, avatar: localAvatarUrl(user.avatar) })),
     })) };
   });
 }
@@ -165,7 +166,11 @@ export async function getBlueprint(actorUserId: string, id: string) {
     return {
       blueprint: blueprint(record),
       details: details.rows.map(detail),
-      assignments: assignments.rows.map((row) => ({ ...row, assigned_at: iso(row.assigned_at) })),
+      assignments: assignments.rows.map((row) => ({
+        ...row,
+        customer_avatar: localAvatarUrl(row.customer_avatar),
+        assigned_at: iso(row.assigned_at),
+      })),
     };
   });
 }
@@ -319,6 +324,10 @@ export async function searchActiveClients(actorUserId: string, query: string) {
         AND full_name ILIKE $1 ESCAPE '\\'
       ORDER BY full_name ASC NULLS LAST, id ASC LIMIT 20
     `, [`%${escaped}%`]);
-    return { data: result.rows.map((row) => ({ ...row, full_name: row.full_name ?? "Sin nombre" })) };
+    return { data: result.rows.map((row) => ({
+      ...row,
+      avatar_url: localAvatarUrl(row.avatar_url),
+      full_name: row.full_name ?? "Sin nombre",
+    })) };
   });
 }

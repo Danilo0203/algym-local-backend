@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compara las imágenes del disco con las URLs de PostgreSQL local, sin modificar nada.
 
-Incluye image_url y animation_url de ejercicios, además de image_url de productos.
+Incluye image_url y animation_url de ejercicios, image_url de productos y avatar_url de perfiles.
 Informa archivos sin vínculo, referencias sin archivo válido y archivos inválidos.
 El informe puede contener nombres de archivos locales: consérvalo fuera de Git.
 """
@@ -22,7 +22,7 @@ import import_local_media as importer
 
 
 FILENAME = re.compile(r"[a-f0-9]{64}\.(png|jpg|webp|gif)\Z")
-KINDS = ("exercises", "products")
+KINDS = ("exercises", "products", "avatars")
 
 
 def read_references(args: argparse.Namespace) -> tuple[set[str], int, int, list[str]]:
@@ -34,6 +34,8 @@ def read_references(args: argparse.Namespace) -> tuple[set[str], int, int, list[
           SELECT 'exercises'::text AS kind, animation_url AS url FROM public.exercises
           UNION ALL
           SELECT 'products'::text AS kind, image_url AS url FROM public.products
+          UNION ALL
+          SELECT 'avatars'::text AS kind, avatar_url AS url FROM public.profiles
         ) AS rows
         WHERE url IS NOT NULL;
     """)

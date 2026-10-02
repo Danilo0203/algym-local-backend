@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { localAvatarUrl } from "../media/media.service.js";
 import {
   profileResponseSchema,
   profileUpdateSchema,
@@ -103,7 +104,7 @@ function mapProfileRow(row: ProfileRow): ProfileResponse {
     phone: row.phone,
     birth_date: row.birth_date,
     gender: row.gender,
-    avatar_url: row.avatar_url,
+    avatar_url: localAvatarUrl(row.avatar_url),
     role: row.role,
     created_at: row.created_at?.toISOString() ?? null,
     updated_at: row.updated_at?.toISOString() ?? null,

@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { localAvatarUrl } from "../media/media.service.js";
 import type { PaymentsListQuery } from "./payments.schemas.js";
 
 type PaymentRow = {
@@ -99,6 +100,7 @@ export async function listPayments(actorUserId: string, input: PaymentsListQuery
     return {
       data: rows.rows.map((row) => ({
         ...row,
+        avatar_url: localAvatarUrl(row.avatar_url),
         payment_date: row.payment_date.toISOString(),
         amount_paid: Number(row.amount_paid),
         user_name: row.user_name || "Usuario eliminado",

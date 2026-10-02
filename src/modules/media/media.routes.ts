@@ -6,7 +6,7 @@ import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.
 import { readMedia, requireMediaReadPermission } from "./media.service.js";
 
 export const mediaRouter = Router();
-const mediaKindSchema = z.enum(["exercises", "products"]);
+const mediaKindSchema = z.enum(["exercises", "products", "avatars"]);
 
 mediaRouter.get("/:kind/:filename", async (request, response, next) => {
   try {

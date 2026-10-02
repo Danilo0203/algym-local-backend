@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { localAvatarUrl } from "../media/media.service.js";
 import { createMembershipForCustomerInTransaction } from "../memberships/memberships.service.js";
 import { createPaidMembershipInTransaction } from "../payments/paid-membership.service.js";
 import { paidMembershipSchema } from "../payments/payments.schemas.js";
@@ -331,7 +332,7 @@ function mapCustomerListItem(row: CustomerListRow): CustomerListItem {
     email: row.email,
     full_name: row.full_name,
     phone: row.phone,
-    avatar_url: row.avatar_url,
+    avatar_url: localAvatarUrl(row.avatar_url),
     birth_date: row.birth_date,
     gender: row.gender,
     biometric_id: row.biometric_id,
@@ -735,6 +736,7 @@ export async function listCustomerSidebar(
     return {
       data: result.rows.map((row) => ({
         ...row,
+        avatar_url: localAvatarUrl(row.avatar_url),
         biometric_id: Number(row.biometric_id),
       })),
     };

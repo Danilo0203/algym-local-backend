@@ -7,10 +7,15 @@ import type { PoolClient } from "pg";
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
 
-export type MediaKind = "exercises" | "products";
+export type MediaKind = "exercises" | "products" | "avatars";
 
 const maxImageBytes = 5 * 1024 * 1024;
 const filenamePattern = /^[a-f0-9]{64}\.(png|jpg|webp|gif)$/;
+const avatarUrlPattern = /^\/api\/media\/avatars\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/;
+
+export function localAvatarUrl(value: string | null): string | null {
+  return value && avatarUrlPattern.test(value) ? value : null;
+}
 
 export async function lockMediaFilename(client: PoolClient, kind: MediaKind, filename: string) {
   if (!filenamePattern.test(filename)) {
@@ -69,6 +74,24 @@ export async function requireMediaReadPermission(actorUserId: string, kind: Medi
       "SELECT public.get_current_permissions() AS permissions, public.is_owner() AS is_owner",
     );
     const auth = result.rows[0];
+    if (kind === "avatars") {
+      const profiles = await client.query<{ id: string; role: string }>(
+        "SELECT id, role::text AS role FROM public.profiles WHERE avatar_url = $1",
+        [url],
+      );
+      if (!profiles.rows.length) throw new AppError(404, "MEDIA_NOT_FOUND", "Imagen no encontrada");
+      const mayRead = profiles.rows.some((profile) => {
+        const allowed = profile.role === "client"
+          ? ["customers.view", "dashboard.view", "payments.view", "routines.view"]
+          : ["users.view"];
+        return auth?.is_owner || profile.id === actorUserId
+          || allowed.some((permission) => auth?.permissions?.includes(permission));
+      });
+      if (!mayRead) {
+        throw new AppError(403, "FORBIDDEN", "No autorizado para consultar esta imagen");
+      }
+      return;
+    }
     const allowed = kind === "exercises"
       ? ["exercises.view", "exercises.create", "exercises.update", "routines.view", "customers.manage_routine"]
       : ["products.view", "products.create", "products.update", "products.delete", "inventory.view", "inventory.adjust"];

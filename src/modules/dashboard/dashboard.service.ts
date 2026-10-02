@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { localAvatarUrl } from "../media/media.service.js";
 import {
   dashboardOverviewResponseSchema,
   paymentMethodLabelMap,
@@ -891,7 +892,7 @@ export async function getDashboardOverview(
         id: row.id,
         user_id: row.user_id,
         user_name: row.user_name ?? "Usuario",
-        avatar_url: row.avatar_url,
+        avatar_url: localAvatarUrl(row.avatar_url),
         plan_name: row.plan_name,
         amount: roundTo(parseNumeric(row.amount), 2),
         method: row.method,
@@ -900,7 +901,7 @@ export async function getDashboardOverview(
       expiringSubscriptions: expiringSubscriptionsRows.map((row) => ({
         user_id: row.user_id,
         user_name: row.user_name ?? "Usuario",
-        avatar_url: row.avatar_url,
+        avatar_url: localAvatarUrl(row.avatar_url),
         phone: row.phone,
         plan_name: row.plan_name ?? "Plan",
         end_date: row.end_date,
@@ -909,7 +910,7 @@ export async function getDashboardOverview(
       inactiveCustomers: inactiveCustomersRows.map((row) => ({
         user_id: row.user_id,
         user_name: row.user_name ?? "Usuario",
-        avatar_url: row.avatar_url,
+        avatar_url: localAvatarUrl(row.avatar_url),
         phone: row.phone,
         last_plan: row.last_plan ?? "Plan",
         expired_date: row.expired_date,

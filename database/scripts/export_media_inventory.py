@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crea un manifiesto privado desde una copia local de ejercicios/productos."""
+"""Crea un manifiesto privado desde una copia local de ejercicios/productos/avatares."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import import_local_media as importer
 LOCAL_URL = {
     "exercises": re.compile(r"/api/media/exercises/[a-f0-9]{64}\.(?:png|jpg|webp|gif)\Z"),
     "products": re.compile(r"/api/media/products/[a-f0-9]{64}\.(?:png|jpg|webp|gif)\Z"),
+    "avatars": re.compile(r"/api/media/avatars/[a-f0-9]{64}\.(?:png|jpg|webp|gif)\Z"),
 }
 
 
@@ -53,6 +54,10 @@ def main() -> None:
           SELECT 'products'::text AS kind, id::text AS id, image_url,
                  NULL::text AS animation_url
           FROM public.products
+          UNION ALL
+          SELECT 'avatars'::text AS kind, id::text AS id, avatar_url AS image_url,
+                 NULL::text AS animation_url
+          FROM public.profiles
         ) AS rows;
     """)
     rows = json.loads(payload)
@@ -66,8 +71,9 @@ def main() -> None:
             url is not None and not LOCAL_URL[kind].fullmatch(url) for url in old_urls
         ):
             continue
+        expected_key = "expected_avatar_url" if kind == "avatars" else "expected_image_url"
         item = {"kind": kind, "id": row["id"],
-                "expected_image_url": row["image_url"], "file": ""}
+                expected_key: row["image_url"], "file": ""}
         if kind == "exercises":
             item["expected_animation_url"] = row["animation_url"]
             if row["animation_url"] not in (None, row["image_url"]):

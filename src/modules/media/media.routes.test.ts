@@ -158,6 +158,31 @@ test("imágenes locales exigen vínculo y permiso de lectura, y conservan bytes"
   assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", employee.cookie)).status, 403);
   assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", client.cookie)).status, 403);
 
+  const storedAvatar = await saveMedia("avatars", png);
+  const avatarFilename = storedAvatar.url.split("/").at(-1);
+  assert.equal((await request(app).get(`/media/avatars/${avatarFilename}`)
+    .set("Cookie", client.cookie)).status, 404);
+  adminSql(`UPDATE public.profiles SET avatar_url = '${storedAvatar.url}' WHERE id = '${client.userId}'`);
+  const ownAvatar = await request(app).get(`/media/avatars/${avatarFilename}`)
+    .set("Cookie", client.cookie);
+  assert.equal(ownAvatar.status, 200, JSON.stringify(ownAvatar.body));
+  assert.deepEqual(ownAvatar.body, png);
+  assert.equal((await request(app).get(`/media/avatars/${avatarFilename}`)
+    .set("Cookie", otherClient.cookie)).status, 404);
+  assert.equal((await request(app).get(`/media/avatars/${avatarFilename}`)
+    .set("Cookie", owner.cookie)).status, 200);
+  assert.equal((await request(app).get(`/media/avatars/${avatarFilename}`)
+    .set("Cookie", admin.cookie)).status, 200);
+  const ownProfile = await request(app).get("/me/profile").set("Cookie", client.cookie);
+  assert.equal(ownProfile.status, 200);
+  assert.equal(ownProfile.body.avatar_url, storedAvatar.url);
+  assert.equal(ownProfile.body.overview.avatar_url, storedAvatar.url);
+  adminSql(`UPDATE public.profiles SET avatar_url = '${storedAvatar.url}' WHERE id = '${otherClient.userId}'`);
+  const sharedAvatar = await request(app).get(`/media/avatars/${avatarFilename}`)
+    .set("Cookie", otherClient.cookie);
+  assert.equal(sharedAvatar.status, 200);
+  assert.deepEqual(sharedAvatar.body, png);
+
   assert.equal((await request(app).post("/media/exercises")
     .set("Cookie", owner.cookie).set("Content-Type", "image/png").send(png)).status, 405);
   const invalid = await request(app).post("/exercises/with-image")

@@ -263,7 +263,7 @@ test("GET /profile devuelve el perfil propio", async () => {
     phone: "55512345",
     birth_date: "1992-08-15",
     gender: "female",
-    avatar_url: "https://example.com/avatar.png",
+    avatar_url: null,
     role: "client",
     created_at: response.body.created_at,
     updated_at: response.body.updated_at,

@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { getOwnRoutineWorkspace } from "../customer-routines/customer-routines.service.js";
+import { localAvatarUrl } from "../media/media.service.js";
 import { getProfile } from "../profile/profile.service.js";
 
 type OverviewRow = {
@@ -38,7 +39,7 @@ async function getOwnOverviewInTransaction(client: PoolClient, actorUserId: stri
   const row = result.rows[0];
   return row ? {
     ...row,
-    avatar_url: null,
+    avatar_url: localAvatarUrl(row.avatar_url),
     last_check_in: row.last_check_in?.toISOString() ?? null,
   } : null;
 }
@@ -52,7 +53,7 @@ export async function getOwnProfileData(actorUserId: string) {
     getProfile(actorUserId),
     getOwnOverview(actorUserId),
   ]);
-  return { ...profile, avatar_url: null, overview };
+  return { ...profile, avatar_url: localAvatarUrl(profile.avatar_url), overview };
 }
 
 export async function getOwnMembershipData(actorUserId: string) {

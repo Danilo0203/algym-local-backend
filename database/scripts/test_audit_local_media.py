@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import uuid
 
 
 SCRIPT = Path(__file__).with_name("audit_local_media.py")
@@ -34,19 +35,24 @@ class AuditLocalMediaTest(unittest.TestCase):
             media_root = root / "media"
             exercise_dir = media_root / "exercises"
             product_dir = media_root / "products"
+            avatar_dir = media_root / "avatars"
             exercise_dir.mkdir(parents=True)
             product_dir.mkdir()
+            avatar_dir.mkdir()
             digest = hashlib.sha256(PNG).hexdigest()
             filename = f"{digest}.png"
             exercise_file = exercise_dir / filename
             orphan_file = product_dir / filename
+            avatar_file = avatar_dir / filename
             exercise_file.write_bytes(PNG)
             orphan_file.write_bytes(PNG)
+            avatar_file.write_bytes(PNG)
             corrupt_file = exercise_dir / f"{'0' * 64}.png"
             corrupt_file.write_bytes(PNG)
             (product_dir / "link.png").symlink_to(exercise_file)
             exercise_url = f"/api/media/exercises/{filename}"
             missing_url = f"/api/media/products/{'f' * 64}.png"
+            avatar_url = f"/api/media/avatars/{filename}"
 
             exercise_id = psql(
                 "INSERT INTO public.exercises (name, image_url, animation_url) "
@@ -60,6 +66,14 @@ class AuditLocalMediaTest(unittest.TestCase):
                 "INSERT INTO public.products (name, sale_price, image_url) "
                 "VALUES ('ZZTEST AUDIT MEDIA remoto', 10, 'https://old.example/image.png') RETURNING id"
             )
+            avatar_id = str(uuid.uuid4())
+            psql("INSERT INTO auth.users (id, email, encrypted_password, raw_user_meta_data, created_at, updated_at) "
+                 f"VALUES ('{avatar_id}', '{avatar_id}@media-audit.test.local', 'unused', '{{}}'::jsonb, now(), now())")
+            psql("INSERT INTO public.profiles "
+                 "(id, full_name, phone, birth_date, gender, role, biometric_id, is_active, avatar_url) "
+                 f"VALUES ('{avatar_id}', 'ZZTEST AUDIT MEDIA avatar', '55540000', DATE '1990-01-01', "
+                 f"'male', 'client', {int(avatar_id.replace('-', '')[:7], 16) % 9000000 + 1000000}, true, "
+                 f"'{avatar_url}')")
             try:
                 before = psql(
                     "SELECT image_url FROM public.products "
@@ -71,9 +85,9 @@ class AuditLocalMediaTest(unittest.TestCase):
                 )
                 report = json.loads(result.stdout)
                 self.assertEqual(report["database"], "algym_test")
-                self.assertEqual(report["local_reference_count"], 2)
+                self.assertEqual(report["local_reference_count"], 3)
                 self.assertGreaterEqual(report["external_reference_count"], 1)
-                self.assertEqual(report["referenced_file_count"], 1)
+                self.assertEqual(report["referenced_file_count"], 2)
                 self.assertIn(f"products/{filename}", report["unreferenced_files"])
                 self.assertIn(missing_url, report["missing_references"])
                 self.assertIn(f"exercises/{'0' * 64}.png",
@@ -81,6 +95,7 @@ class AuditLocalMediaTest(unittest.TestCase):
                 self.assertIn("products/link.png", {row["file"] for row in report["invalid_files"]})
                 self.assertEqual(exercise_file.read_bytes(), PNG)
                 self.assertEqual(orphan_file.read_bytes(), PNG)
+                self.assertEqual(avatar_file.read_bytes(), PNG)
                 self.assertEqual(psql(f"SELECT image_url FROM public.products WHERE id = '{product_id}'"), before)
 
                 denied = subprocess.run(
@@ -92,6 +107,8 @@ class AuditLocalMediaTest(unittest.TestCase):
             finally:
                 psql(f"DELETE FROM public.exercises WHERE id = {exercise_id}")
                 psql(f"DELETE FROM public.products WHERE id IN ('{product_id}', '{remote_product_id}')")
+                psql(f"DELETE FROM public.profiles WHERE id = '{avatar_id}'")
+                psql(f"DELETE FROM auth.users WHERE id = '{avatar_id}'")
 
 
 if __name__ == "__main__":

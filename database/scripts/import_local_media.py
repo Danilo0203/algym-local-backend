@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vincula archivos locales a ejercicios/productos de PostgreSQL sin usar internet.
+"""Vincula archivos locales a ejercicios/productos/avatares de PostgreSQL sin internet.
 
 El manifiesto JSON indica el ID, los valores actuales esperados y el archivo local.
 Sin --apply solo valida y muestra la propuesta. Para algym, --apply exige un
@@ -121,10 +121,10 @@ def read_manifest(path: Path) -> list[MediaItem]:
         if not isinstance(row, dict):
             raise ValueError(f"Elemento {index}: se requiere un objeto")
         kind, entity_id = row.get("kind"), row.get("id")
-        if kind not in ("exercises", "products") or not isinstance(entity_id, str):
+        if kind not in ("exercises", "products", "avatars") or not isinstance(entity_id, str):
             raise ValueError(f"Elemento {index}: kind o id inválido")
         if (kind == "exercises" and not re.fullmatch(r"[1-9][0-9]*", entity_id)) or (
-            kind == "products" and not UUID_PATTERN.fullmatch(entity_id)
+            kind in ("products", "avatars") and not UUID_PATTERN.fullmatch(entity_id)
         ):
             raise ValueError(f"Elemento {index}: id inválido")
         key = kind, entity_id.lower()
@@ -132,8 +132,9 @@ def read_manifest(path: Path) -> list[MediaItem]:
             raise ValueError(f"Elemento {index}: entidad repetida")
         seen.add(key)
 
-        if "expected_image_url" not in row or not isinstance(row["expected_image_url"], (str, type(None))):
-            raise ValueError(f"Elemento {index}: falta expected_image_url")
+        expected_key = "expected_avatar_url" if kind == "avatars" else "expected_image_url"
+        if expected_key not in row or not isinstance(row[expected_key], (str, type(None))):
+            raise ValueError(f"Elemento {index}: falta {expected_key}")
         if kind == "exercises" and (
             "expected_animation_url" not in row
             or not isinstance(row["expected_animation_url"], (str, type(None)))
@@ -160,9 +161,9 @@ def read_manifest(path: Path) -> list[MediaItem]:
                 raise ValueError(
                     f"Elemento {index}: la animación histórica es distinta; indicar animation_file o null")
         elif "animation_file" in row or "animation_sha256" in row:
-            raise ValueError(f"Elemento {index}: un producto no admite animation_file")
+            raise ValueError(f"Elemento {index}: {kind} no admite animation_file")
         items.append(MediaItem(
-            kind, entity_id, source, row["expected_image_url"],
+            kind, entity_id, source, row[expected_key],
             row.get("expected_animation_url"), data, digest, extension,
             animation_source, animation_data, animation_digest, animation_extension,
             animation_clear,
@@ -218,15 +219,17 @@ def run_psql(args: argparse.Namespace, sql: str) -> str:
 
 def read_rows(args: argparse.Namespace, items: list[MediaItem]) -> dict[tuple[str, str], dict]:
     selects = []
-    for kind in ("exercises", "products"):
+    for kind in ("exercises", "products", "avatars"):
         ids = [sql_literal(item.entity_id) for item in items if item.kind == kind]
         if not ids:
             continue
         id_type = "bigint" if kind == "exercises" else "uuid"
         animation = "animation_url" if kind == "exercises" else "NULL::text AS animation_url"
+        table = "profiles" if kind == "avatars" else kind
+        image = "avatar_url AS image_url" if kind == "avatars" else "image_url"
         selects.append(
-            f"SELECT {sql_literal(kind)}::text AS kind, id::text AS id, image_url, {animation} "
-            f"FROM public.{kind} WHERE id = ANY(ARRAY[{', '.join(ids)}]::{id_type}[])"
+            f"SELECT {sql_literal(kind)}::text AS kind, id::text AS id, {image}, {animation} "
+            f"FROM public.{table} WHERE id = ANY(ARRAY[{', '.join(ids)}]::{id_type}[])"
         )
     query = " UNION ALL ".join(selects)
     payload = run_psql(args, "SELECT COALESCE(json_agg(row_to_json(rows)), '[]'::json)\n"
@@ -323,12 +326,20 @@ def update_rows(args: argparse.Namespace, items: list[MediaItem]) -> None:
                     old_animation=sql_literal(item.expected_animation_url),
                 )
             )
-        else:
+        elif item.kind == "products":
             statements.append(
                 "UPDATE public.products SET image_url = {url} WHERE id = {id}::uuid "
                 "AND image_url IS NOT DISTINCT FROM {old_image};".format(
                     url=sql_literal(item.url), id=sql_literal(item.entity_id),
                     old_image=sql_literal(item.expected_image_url),
+                )
+            )
+        else:
+            statements.append(
+                "UPDATE public.profiles SET avatar_url = {url} WHERE id = {id}::uuid "
+                "AND avatar_url IS NOT DISTINCT FROM {old_avatar};".format(
+                    url=sql_literal(item.url), id=sql_literal(item.entity_id),
+                    old_avatar=sql_literal(item.expected_image_url),
                 )
             )
         statements.append("GET DIAGNOSTICS changed = ROW_COUNT;")
@@ -400,7 +411,8 @@ def main() -> None:
         print(f"Importados {len(items)} registros y {created} archivos nuevos en {args.db_name}")
     else:
         for item in items:
-            print(f"{item.kind}/{item.entity_id}: imagen={item.url} animación={item.animation_url} "
+            label = "avatar" if item.kind == "avatars" else "imagen"
+            print(f"{item.kind}/{item.entity_id}: {label}={item.url} animación={item.animation_url} "
                   f"sha256={item.digest}")
         print(f"Validación sin escritura: {len(items)} registros de {args.db_name}")
 

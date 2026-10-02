@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import uuid
 
 from database.scripts import import_local_media as importer
 
@@ -88,6 +89,14 @@ class ImportLocalMediaTest(unittest.TestCase):
                 "INSERT INTO public.products (name, sale_price, image_url) "
                 "VALUES ('ZZTEST IMPORT MEDIA producto', 10, 'https://old.example/product.png') RETURNING id"
             )
+            avatar_id = str(uuid.uuid4())
+            psql("INSERT INTO auth.users (id, email, encrypted_password, raw_user_meta_data, created_at, updated_at) "
+                 f"VALUES ('{avatar_id}', '{avatar_id}@media-import.test.local', 'unused', '{{}}'::jsonb, now(), now())")
+            psql("INSERT INTO public.profiles "
+                 "(id, full_name, phone, birth_date, gender, role, biometric_id, is_active, avatar_url) "
+                 f"VALUES ('{avatar_id}', 'ZZTEST IMPORT MEDIA avatar', '55540000', DATE '1990-01-01', "
+                 f"'male', 'client', {int(avatar_id.replace('-', '')[:7], 16) % 9000000 + 1000000}, true, "
+                 "'https://old.example/avatar.png')")
             try:
                 inventory = root / "inventory.json"
                 subprocess.run(["python3", str(EXPORTER), "--output", str(inventory)],
@@ -98,6 +107,8 @@ class ImportLocalMediaTest(unittest.TestCase):
                                  "https://old.example/animation.gif")
                 self.assertEqual(by_key[("exercises", exercise_id)]["animation_file"], "")
                 self.assertEqual(by_key[("products", product_id)]["file"], "")
+                self.assertEqual(by_key[("avatars", avatar_id)]["expected_avatar_url"],
+                                 "https://old.example/avatar.png")
                 self.assertEqual(inventory.stat().st_mode & 0o777, 0o600)
                 duplicate_export = subprocess.run(
                     ["python3", str(EXPORTER), "--output", str(inventory)],
@@ -114,11 +125,13 @@ class ImportLocalMediaTest(unittest.TestCase):
                      "animation_file": str(animation_source), "animation_sha256": animation_digest},
                     {"kind": "products", "id": product_id, "file": str(source),
                      "expected_image_url": "https://old.example/product.png", "sha256": digest},
+                    {"kind": "avatars", "id": avatar_id, "file": str(source),
+                     "expected_avatar_url": "https://old.example/avatar.png", "sha256": digest},
                 ]}), encoding="utf-8")
                 command = ["python3", str(SCRIPT), str(manifest), "--media-root", str(media_root)]
 
                 dry = subprocess.run(command, capture_output=True, text=True, check=True)
-                self.assertIn("Validación sin escritura: 2", dry.stdout)
+                self.assertIn("Validación sin escritura: 3", dry.stdout)
                 self.assertIn(f"/api/media/exercises/{animation_digest}.gif", dry.stdout)
                 no_backup = subprocess.run(command + ["--db-name", "algym", "--apply"],
                                            capture_output=True, text=True, check=False)
@@ -129,18 +142,22 @@ class ImportLocalMediaTest(unittest.TestCase):
                 self.assertEqual(list(media_root.iterdir()), [])
 
                 applied = subprocess.run(command + ["--apply"], capture_output=True, text=True, check=True)
-                self.assertIn("Importados 2 registros y 3 archivos nuevos", applied.stdout)
+                self.assertIn("Importados 3 registros y 4 archivos nuevos", applied.stdout)
                 expected_exercise_url = f"/api/media/exercises/{digest}.png"
                 expected_animation_url = f"/api/media/exercises/{animation_digest}.gif"
                 expected_product_url = f"/api/media/products/{digest}.png"
+                expected_avatar_url = f"/api/media/avatars/{digest}.png"
                 self.assertEqual(psql(f"SELECT image_url || '|' || animation_url "
                                       f"FROM public.exercises WHERE id = {exercise_id}"),
                                  f"{expected_exercise_url}|{expected_animation_url}")
                 self.assertEqual(psql(f"SELECT image_url FROM public.products WHERE id = '{product_id}'"),
                                  expected_product_url)
+                self.assertEqual(psql(f"SELECT avatar_url FROM public.profiles WHERE id = '{avatar_id}'"),
+                                 expected_avatar_url)
                 self.assertEqual((media_root / "exercises" / f"{digest}.png").read_bytes(), PNG)
                 self.assertEqual((media_root / "exercises" / f"{animation_digest}.gif").read_bytes(), GIF)
                 self.assertEqual((media_root / "products" / f"{digest}.png").read_bytes(), PNG)
+                self.assertEqual((media_root / "avatars" / f"{digest}.png").read_bytes(), PNG)
                 inventory_after = root / "inventory-after.json"
                 subprocess.run(["python3", str(EXPORTER), "--output", str(inventory_after)],
                                capture_output=True, text=True, check=True)
@@ -148,6 +165,8 @@ class ImportLocalMediaTest(unittest.TestCase):
                 self.assertNotIn(("exercises", exercise_id),
                                  {(item["kind"], item["id"]) for item in exported_after})
                 self.assertNotIn(("products", product_id),
+                                 {(item["kind"], item["id"]) for item in exported_after})
+                self.assertNotIn(("avatars", avatar_id),
                                  {(item["kind"], item["id"]) for item in exported_after})
 
                 items = importer.read_manifest(manifest)
@@ -167,6 +186,8 @@ class ImportLocalMediaTest(unittest.TestCase):
             finally:
                 psql(f"DELETE FROM public.exercises WHERE id = {exercise_id}")
                 psql(f"DELETE FROM public.products WHERE id = '{product_id}'")
+                psql(f"DELETE FROM public.profiles WHERE id = '{avatar_id}'")
+                psql(f"DELETE FROM auth.users WHERE id = '{avatar_id}'")
 
 
 if __name__ == "__main__":
