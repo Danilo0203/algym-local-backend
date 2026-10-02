@@ -12,6 +12,7 @@ import request from "supertest";
 
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
+import { saveMedia } from "../media/media.service.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const domain = "@inventory.test.local";
@@ -94,14 +95,12 @@ test("inventario local guarda imagen, producto y stock; empleados ajustan sin ed
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
     "base64",
   );
-  const uploaded = await request(app).post("/media/products").set("Cookie", owner.cookie)
-    .set("Content-Type", "image/png").send(png);
-  assert.equal(uploaded.status, 201);
+  const uploaded = await saveMedia("products", png);
 
   const input = {
     name: "ZZTEST PRODUCTO LOCAL", sku: "ZINV-1", barcode: null,
     costPrice: 4, salePrice: 10, isActive: true,
-    imageUrl: uploaded.body.url, initialQuantity: 5,
+    imageUrl: uploaded.url, initialQuantity: 5,
   };
   const created = await request(app).post("/inventory/products")
     .set("Cookie", owner.cookie).send(input);
@@ -114,7 +113,7 @@ test("inventario local guarda imagen, producto y stock; empleados ajustan sin ed
   assert.equal(listed.status, 200, JSON.stringify(listed.body));
   assert.equal(listed.body.total, 1);
   assert.equal(listed.body.data[0].stock_quantity, 5);
-  assert.equal(listed.body.data[0].image_url, uploaded.body.url);
+  assert.equal(listed.body.data[0].image_url, uploaded.url);
   const { initialQuantity: _initialQuantity, ...updateInput } = input;
   assert.equal((await request(app).put(`/inventory/products/${productId}`)
     .set("Cookie", employee.cookie).send(updateInput)).status, 403);

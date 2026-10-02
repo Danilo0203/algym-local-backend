@@ -12,6 +12,7 @@ import request from "supertest";
 
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
+import { saveMedia } from "../media/media.service.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const testEmailDomain = "@exercises.test.local";
@@ -78,19 +79,17 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
     "base64",
   );
-  const uploaded = await request(app).post("/media/exercises").set("Cookie", owner.cookie)
-    .set("Content-Type", "image/png").send(png);
-  assert.equal(uploaded.status, 201);
+  const uploaded = await saveMedia("exercises", png);
 
   const name = `ZZTEST LOCAL EXERCISE ${randomUUID()}`;
   const created = await request(app).post("/exercises").set("Cookie", owner.cookie).send({
     name,
-    image_url: uploaded.body.url,
+    image_url: uploaded.url,
     original_file_name: "ejercicio.png",
   });
   assert.equal(created.status, 201);
   assert.equal(created.body.name, name);
-  assert.equal(created.body.image_url, uploaded.body.url);
+  assert.equal(created.body.image_url, uploaded.url);
   const id = created.body.id;
 
   const textOnlyName = `ZZTEST LOCAL EXERCISE SIN ARCHIVO ${randomUUID()}`;
@@ -110,13 +109,13 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
   assert.deepEqual(textOnly.body.equipments, ["dumbbell"]);
   assert.deepEqual(textOnly.body.instructions, ["Flexiona las rodillas con control."]);
   const attachedImage = await request(app).patch(`/exercises/${textOnly.body.id}`).set("Cookie", owner.cookie).send({
-    imageUrl: uploaded.body.url,
+    imageUrl: uploaded.url,
     originalFileName: "imagen-local.png",
     target_muscles: ["quadriceps", "glutes"],
     equipments: [],
   });
   assert.equal(attachedImage.status, 200);
-  assert.equal(attachedImage.body.image_url, uploaded.body.url);
+  assert.equal(attachedImage.body.image_url, uploaded.url);
   assert.deepEqual(attachedImage.body.target_muscles, ["quadriceps", "glutes"]);
   assert.deepEqual(attachedImage.body.equipments, []);
   const remoteImage = await request(app).patch(`/exercises/${textOnly.body.id}`).set("Cookie", owner.cookie).send({

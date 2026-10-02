@@ -58,19 +58,6 @@ function imageExtension(bytes: Buffer): string | null {
   return null;
 }
 
-export async function requireMediaUploadPermission(actorUserId: string, kind: MediaKind) {
-  await withUserTransaction(actorUserId, async (client) => {
-    const result = await client.query<{ permissions: string[] | null; is_owner: boolean }>(
-      "SELECT public.get_current_permissions() AS permissions, public.is_owner() AS is_owner",
-    );
-    const auth = result.rows[0];
-    const permissionPrefix = kind === "exercises" ? "exercises" : "products";
-    if (!auth?.is_owner && !["create", "update"].some((action) => auth?.permissions?.includes(`${permissionPrefix}.${action}`))) {
-      throw new AppError(403, "FORBIDDEN", "No autorizado para subir imágenes");
-    }
-  });
-}
-
 export async function requireMediaReadPermission(actorUserId: string, kind: MediaKind, filename: string) {
   if (!filenamePattern.test(filename)) {
     throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");

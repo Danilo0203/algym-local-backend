@@ -12,6 +12,7 @@ import request from "supertest";
 
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
+import { saveMedia } from "./media.service.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const testEmailDomain = "@media.test.local";
@@ -73,7 +74,7 @@ after(async () => {
   await pool.end();
 });
 
-test("imágenes locales exigen sesión y permiso para subir, y conservan bytes", async () => {
+test("imágenes locales exigen vínculo y permiso de lectura, y conservan bytes", async () => {
   const owner = await createUser("owner");
   const admin = await createUser("admin");
   const employee = await createUser("employee");
@@ -84,26 +85,30 @@ test("imágenes locales exigen sesión y permiso para subir, y conservan bytes",
     "base64",
   );
 
-  const anonymous = await request(app).post("/media/exercises").set("Content-Type", "image/png").send(png);
+  const exerciseInput = { name: "ZZTEST MEDIA ejercicio", image_base64: png.toString("base64") };
+  const anonymous = await request(app).post("/exercises/with-image").send(exerciseInput);
   assert.equal(anonymous.status, 401);
-  const denied = await request(app).post("/media/exercises").set("Cookie", client.cookie).set("Content-Type", "image/png").send(png);
+  const denied = await request(app).post("/exercises/with-image")
+    .set("Cookie", client.cookie).send(exerciseInput);
   assert.equal(denied.status, 403);
 
-  const uploaded = await request(app).post("/media/exercises").set("Cookie", owner.cookie).set("Content-Type", "image/png").send(png);
-  assert.equal(uploaded.status, 201);
-  assert.match(uploaded.body.url, /^\/api\/media\/exercises\/[a-f0-9]{64}\.png$/);
-  assert.equal(uploaded.body.bytes, png.length);
+  const stored = await saveMedia("exercises", png);
+  assert.match(stored.url, /^\/api\/media\/exercises\/[a-f0-9]{64}\.png$/);
+  assert.equal(stored.bytes, png.length);
 
-  const filename = uploaded.body.url.split("/").at(-1);
+  const filename = stored.url.split("/").at(-1);
   assert.ok(filename);
   const withoutSession = await request(app).get(`/media/exercises/${filename}`);
   assert.equal(withoutSession.status, 401);
   assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", owner.cookie)).status, 404);
   assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", client.cookie)).status, 403);
 
-  const exerciseId = Number(adminValue(`INSERT INTO public.exercises (name, image_url)
-    VALUES ('ZZTEST MEDIA ejercicio', '${uploaded.body.url}') RETURNING id`));
+  const uploaded = await request(app).post("/exercises/with-image")
+    .set("Cookie", owner.cookie).send(exerciseInput);
+  assert.equal(uploaded.status, 201, JSON.stringify(uploaded.body));
+  const exerciseId = Number(uploaded.body.id);
   assert.ok(Number.isInteger(exerciseId) && exerciseId > 0);
+  assert.equal(uploaded.body.image_url, stored.url);
   const image = await request(app).get(`/media/exercises/${filename}`).set("Cookie", owner.cookie);
   assert.equal(image.status, 200);
   assert.match(String(image.headers["content-type"]), /^image\/png/);
@@ -122,14 +127,12 @@ test("imágenes locales exigen sesión y permiso para subir, y conservan bytes",
   assert.equal((await request(app).get(`/media/exercises/${filename}`).set("Cookie", otherClient.cookie)).status, 403);
 
   const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
-  const uploadedAnimation = await request(app).post("/media/exercises")
-    .set("Cookie", owner.cookie).set("Content-Type", "image/gif").send(gif);
-  assert.equal(uploadedAnimation.status, 201);
-  const animationFilename = uploadedAnimation.body.url.split("/").at(-1);
+  const uploadedAnimation = await saveMedia("exercises", gif);
+  const animationFilename = uploadedAnimation.url.split("/").at(-1);
   assert.ok(animationFilename);
   assert.equal((await request(app).get(`/media/exercises/${animationFilename}`)
     .set("Cookie", owner.cookie)).status, 404);
-  adminSql(`UPDATE public.exercises SET animation_url = '${uploadedAnimation.body.url}' WHERE id = ${exerciseId}`);
+  adminSql(`UPDATE public.exercises SET animation_url = '${uploadedAnimation.url}' WHERE id = ${exerciseId}`);
   const ownAnimation = await request(app).get(`/media/exercises/${animationFilename}`)
     .set("Cookie", client.cookie);
   assert.equal(ownAnimation.status, 200);
@@ -140,19 +143,26 @@ test("imágenes locales exigen sesión y permiso para subir, y conservan bytes",
   assert.equal((await request(app).get(`/media/exercises/${animationFilename}`)
     .set("Cookie", otherClient.cookie)).status, 403);
 
-  const uploadedProduct = await request(app).post("/media/products")
-    .set("Cookie", owner.cookie).set("Content-Type", "image/png").send(png);
-  assert.equal(uploadedProduct.status, 201);
-  const productFilename = uploadedProduct.body.url.split("/").at(-1);
+  const uploadedProduct = await saveMedia("products", png);
+  const productFilename = uploadedProduct.url.split("/").at(-1);
   assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", owner.cookie)).status, 404);
-  adminSql(`INSERT INTO public.products (name, sale_price, image_url)
-    VALUES ('ZZTEST MEDIA producto', 10, '${uploadedProduct.body.url}')`);
+  const createdProduct = await request(app).post("/inventory/products/with-image")
+    .set("Cookie", owner.cookie).send({
+      name: "ZZTEST MEDIA producto", sku: null, barcode: null, costPrice: 0,
+      salePrice: 10, isActive: true, initialQuantity: 0,
+      image_base64: png.toString("base64"),
+    });
+  assert.equal(createdProduct.status, 201, JSON.stringify(createdProduct.body));
   assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", owner.cookie)).status, 200);
   assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", admin.cookie)).status, 403);
   assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", employee.cookie)).status, 403);
   assert.equal((await request(app).get(`/media/products/${productFilename}`).set("Cookie", client.cookie)).status, 403);
 
-  const invalid = await request(app).post("/media/exercises").set("Cookie", owner.cookie).set("Content-Type", "image/png").send(Buffer.from("no es imagen"));
+  assert.equal((await request(app).post("/media/exercises")
+    .set("Cookie", owner.cookie).set("Content-Type", "image/png").send(png)).status, 405);
+  const invalid = await request(app).post("/exercises/with-image")
+    .set("Cookie", owner.cookie)
+    .send({ name: "ZZTEST MEDIA invalido", image_base64: Buffer.from("no es imagen").toString("base64") });
   assert.equal(invalid.status, 400);
   const wrongName = await request(app).get("/media/exercises/archivo.png").set("Cookie", owner.cookie);
   assert.equal(wrongName.status, 400);
