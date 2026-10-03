@@ -157,9 +157,55 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
 
   const registerId = adminSql(`INSERT INTO public.cash_registers (name, is_active)
     VALUES ('${registerName}', true) RETURNING id`);
+  const pendingStart = adminSql(`SELECT ((now() AT TIME ZONE 'America/Guatemala')::date + 3)::text`);
+  const revisedStart = adminSql(`SELECT ((now() AT TIME ZONE 'America/Guatemala')::date + 4)::text`);
+  const revisedEnd = adminSql(`SELECT ((now() AT TIME ZONE 'America/Guatemala')::date + 34)::text`);
+  const pendingCustomer = await request(app).post("/customers")
+    .set("Cookie", owner.cookie).send({
+      full_name: "ZZTEST PENDING CUSTOMER", phone: "55559876",
+      birth_date: "1995-03-05", gender: "female",
+      email: `pending-${randomUUID()}${domain}`,
+      membership: { plan_id: planId, cycles: 1, start_date: pendingStart },
+    });
+  assert.equal(pendingCustomer.status, 201, JSON.stringify(pendingCustomer.body));
+  const pendingId = adminSql(`SELECT id FROM public.subscriptions
+    WHERE user_id = '${pendingCustomer.body.id}'`);
+  assert.equal(adminSql(`SELECT status::text || ':' || initial_collection_origin
+    FROM public.subscriptions WHERE id = '${pendingId}'`), "pending:customers");
+  assert.equal(adminSql(`SELECT count(*) FROM public.payments WHERE user_id = '${pendingCustomer.body.id}'`), "0");
+  assert.equal((await request(app).get("/payments/membership/pending")
+    .set("Cookie", employee.cookie)).status, 409);
   const opened = await request(app).post("/cash/sessions").set("Cookie", employee.cookie)
     .send({ registerId, openingAmount: 50 });
   assert.equal(opened.status, 201, JSON.stringify(opened.body));
+
+  const pendingList = await request(app).get("/payments/membership/pending")
+    .set("Cookie", employee.cookie);
+  assert.equal(pendingList.status, 200, JSON.stringify(pendingList.body));
+  assert.deepEqual(pendingList.body.data.map((row: { id: string }) => row.id), [pendingId]);
+  assert.equal(pendingList.body.data[0].amount_original, 125);
+  const revised = await request(app).patch(`/customers/${pendingCustomer.body.id}/membership/pending`)
+    .set("Cookie", owner.cookie).send({ plan_id: planId, cycles: 1, start_date: revisedStart });
+  assert.equal(revised.status, 200, JSON.stringify(revised.body));
+  assert.equal(revised.body.membership.status, "pending");
+  assert.equal((await request(app).post(`/payments/membership/pending/${pendingId}/collect`)
+    .set("Cookie", customer.cookie).send({})).status, 403);
+  const collected = await request(app).post(`/payments/membership/pending/${pendingId}/collect`)
+    .set("Cookie", employee.cookie).send({ discountAmount: 5, paymentMethod: "cash" });
+  assert.equal(collected.status, 201, JSON.stringify(collected.body));
+  assert.equal(collected.body.subscription_id, pendingId);
+  assert.equal(adminSql(`SELECT status::text || ':' || start_date::text || ':' || end_date::text
+    FROM public.subscriptions WHERE id = '${pendingId}'`), `active:${revisedStart}:${revisedEnd}`);
+  assert.equal(adminSql(`SELECT subscription_id::text || ':' || amount_paid::text FROM public.payments
+    WHERE id = '${collected.body.payment_id}'`), `${pendingId}:120.00`);
+  assert.equal(adminSql(`SELECT cash_session_id::text FROM public.cash_movements
+    WHERE id = '${collected.body.cash_movement_id}'`), opened.body.id);
+  assert.equal((await request(app).post(`/payments/membership/pending/${pendingId}/collect`)
+    .set("Cookie", employee.cookie).send({})).status, 409);
+  assert.equal((await request(app).patch(`/customers/${pendingCustomer.body.id}/membership/pending`)
+    .set("Cookie", owner.cookie).send({ plan_id: planId, cycles: 1 })).status, 409);
+  assert.equal((await request(app).get("/payments/membership/pending")
+    .set("Cookie", employee.cookie)).body.data.length, 0);
 
   const created = await request(app).post("/payments/membership")
     .set("Cookie", employee.cookie).send(input);
@@ -189,7 +235,7 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
 
   const dashboard = await request(app).get("/cash/dashboard").set("Cookie", employee.cookie);
   assert.equal(dashboard.status, 200, JSON.stringify(dashboard.body));
-  assert.equal(dashboard.body.summary.expectedAmount, 170);
+  assert.equal(dashboard.body.summary.expectedAmount, 290);
   const duplicate = await request(app).post("/payments/membership")
     .set("Cookie", employee.cookie).send(input);
   assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body));
@@ -207,7 +253,7 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(adminSql(`SELECT cash_effect_amount::text FROM public.cash_movements
     WHERE id = '${renewal.body.cash_movement_id}'`), "0.00");
   const afterRenewal = await request(app).get("/cash/dashboard").set("Cookie", employee.cookie);
-  assert.equal(afterRenewal.body.summary.expectedAmount, 170);
+  assert.equal(afterRenewal.body.summary.expectedAmount, 290);
   assert.equal(adminSql(`SELECT count(*) FROM public.payments WHERE user_id = '${customer.id}'`), "2");
   assert.equal(adminSql(`SELECT count(*) FROM public.routines WHERE user_id = '${customer.id}'
     AND status = 'pending_profile'`), "1");

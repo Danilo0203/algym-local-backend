@@ -180,12 +180,8 @@ const passwordRequiresEmailError = new AppError(
   "La contraseña requiere un email",
 );
 
-const effectiveMembershipStatusSql = `
-  CASE
-    WHEN overview.subscription_display_status = 'pending' THEN 'none'
-    ELSE overview.subscription_display_status
-  END
-`;
+const effectiveMembershipStatusSql = `CASE WHEN overview.subscription_status = 'pending'
+  THEN 'pending' ELSE overview.subscription_display_status END`;
 
 const customerSortMap = {
   full_name: "overview.full_name",
@@ -820,6 +816,7 @@ export async function createCustomer(
           client,
           customerId,
           input.membership,
+          true,
         );
       }
 

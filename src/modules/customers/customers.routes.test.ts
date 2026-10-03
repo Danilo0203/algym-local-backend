@@ -686,7 +686,7 @@ test("POST /customers crea núcleo y membresía en una sola transacción", { con
 
   assert.equal(response.status, 201);
   assert.equal(response.body.current_membership.plan_name, `${testNamePrefix} Plan atómico`);
-  assert.equal(response.body.current_membership.status, "active");
+  assert.equal(response.body.current_membership.status, "pending");
   assert.equal(response.body.current_membership.start_date, `${membershipYear}-07-21`);
   assert.equal(response.body.current_membership.end_date, `${membershipYear}-09-19`);
   assert.equal(response.body.current_membership.grace_days, 3);
@@ -1203,7 +1203,7 @@ test("GET /customers expone filtros combinados, estados, último ingreso y todos
     .query({ search: `${testNamePrefix} FILTER pending legacy` })
     .set("Cookie", cookie);
   assert.equal(pendingResponse.status, 200);
-  assert.equal(pendingResponse.body.data[0].membership_status, "none");
+  assert.equal(pendingResponse.body.data[0].membership_status, "pending");
   assert.equal(pendingResponse.body.data[0].current_membership.status, "pending");
 
   const combined = await request(app)

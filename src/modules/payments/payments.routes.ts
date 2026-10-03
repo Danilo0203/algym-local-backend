@@ -2,8 +2,9 @@ import { Router } from "express";
 
 import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
-import { paidMembershipSchema, paymentIdSchema, paymentsListQuerySchema, reversePaymentSchema } from "./payments.schemas.js";
+import { collectPendingMembershipSchema, paidMembershipSchema, paymentIdSchema, paymentsListQuerySchema, pendingMembershipQuerySchema, reversePaymentSchema } from "./payments.schemas.js";
 import { createPaidMembership } from "./paid-membership.service.js";
+import { collectPendingMembership, listPendingMemberships } from "./pending-membership.service.js";
 import { getPaymentReversalContext, reverseAndRecreatePayment } from "./payment-reversal.service.js";
 import { getPaymentDetail, listPayments } from "./payments.service.js";
 
@@ -27,6 +28,23 @@ paymentsRouter.post("/membership", async (request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+paymentsRouter.get("/membership/pending", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const { search } = pendingMembershipQuerySchema.parse(request.query);
+    response.status(200).json(await listPendingMemberships(session.userId, search));
+  } catch (error) { next(error); }
+});
+
+paymentsRouter.post("/membership/pending/:id/collect", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const id = paymentIdSchema.parse(request.params.id);
+    const input = collectPendingMembershipSchema.parse(request.body);
+    response.status(201).json(await collectPendingMembership(session.userId, id, input));
+  } catch (error) { next(error); }
 });
 
 paymentsRouter.get("/:id", async (request, response, next) => {

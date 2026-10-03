@@ -53,6 +53,7 @@ export const customerMembershipStatusSchema = z.enum([
   "grace",
   "expired",
   "cancelled",
+  "pending",
   "none",
 ]) satisfies z.ZodType<CustomerMembershipStatus>;
 

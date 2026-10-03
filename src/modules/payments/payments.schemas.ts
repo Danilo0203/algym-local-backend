@@ -56,6 +56,15 @@ export const paidMembershipForNewCustomerSchema = paidMembershipFieldsSchema
 
 export type PaidMembershipInput = z.infer<typeof paidMembershipSchema>;
 
+export const pendingMembershipQuerySchema = z.object({
+  search: z.string().trim().max(100).default(""),
+}).strict();
+
+export const collectPendingMembershipSchema = z.object({
+  discountAmount: money.default(0),
+  paymentMethod: z.enum(["cash", "card", "transfer"]).default("cash"),
+}).strict();
+
 export const paymentIdSchema = z.string().uuid();
 
 export const reversePaymentSchema = z.object({

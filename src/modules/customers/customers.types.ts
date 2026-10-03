@@ -14,6 +14,7 @@ export type CustomerMembershipStatus =
   | "grace"
   | "expired"
   | "cancelled"
+  | "pending"
   | "none";
 
 export type CustomerListQuery = {

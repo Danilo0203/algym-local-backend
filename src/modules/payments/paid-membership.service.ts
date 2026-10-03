@@ -35,6 +35,15 @@ export async function createPaidMembershipInTransaction(
     [input.customerId],
   );
 
+  const pending = await client.query(
+    `SELECT id FROM public.subscriptions WHERE user_id = $1
+       AND status = 'pending' AND initial_collection_origin = 'customers' LIMIT 1`,
+    [input.customerId],
+  );
+  if (pending.rows.length > 0) {
+    throw new AppError(409, "MEMBERSHIP_PAYMENT_PENDING", "Cobra primero la membresía pendiente");
+  }
+
   const customerResult = await client.query<Customer>(
     `SELECT id, role::text AS role, is_active FROM public.profiles WHERE id = $1`,
     [input.customerId],
