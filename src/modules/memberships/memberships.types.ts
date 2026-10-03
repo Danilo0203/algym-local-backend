@@ -13,6 +13,7 @@ export interface MembershipSummary {
     | "grace"
     | "expired"
     | "cancelled"
+    | "pending"
     | "none";
   cycles: number;
   price: number;

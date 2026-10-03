@@ -15,6 +15,7 @@ import {
   cancelMembership,
   createMembership,
   getCustomerMembership,
+  updatePendingMembership,
   renewMembership,
 } from "./memberships.service.js";
 
@@ -59,6 +60,15 @@ membershipsRouter.post("/renew", async (request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+membershipsRouter.patch("/pending", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const customerId = customerIdParamSchema.parse((request.params as { id: string }).id);
+    const input = createMembershipSchema.parse(request.body);
+    response.status(200).json(await updatePendingMembership(session.userId, customerId, input));
+  } catch (error) { next(error); }
 });
 
 membershipsRouter.patch("/status", async (request, response, next) => {

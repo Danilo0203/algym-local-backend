@@ -435,3 +435,10 @@ runCommand("psql", [
   "-f",
   path.join(migrationDirectory, "0031_cash_profile_completeness.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d", targetDatabaseName,
+  "-v", "ON_ERROR_STOP=1",
+  "-f", path.join(migrationDirectory, "0032_pending_customer_membership_collection.sql"),
+]);

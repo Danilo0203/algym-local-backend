@@ -177,7 +177,7 @@ test("POST crea una membresía local con cycles y grace_days fijo", async () => 
   assert.equal(response.body.customer_id, customer.userId);
   assert.equal(response.body.membership.cycles, 2);
   assert.equal(response.body.membership.grace_days, 3);
-  assert.equal(response.body.membership.status, "active");
+  assert.equal(response.body.membership.status, "pending");
   assert.equal(response.body.membership.start_date, "2026-08-01");
   assert.equal(response.body.membership.end_date, "2026-09-30");
   assert.equal(Number(response.body.membership.price), 250);
@@ -221,7 +221,7 @@ test("POST rechaza cliente inactivo y plan inactivo", async () => {
   assert.equal(inactivePlanResponse.body.error.code, "PLAN_INACTIVE");
 });
 
-test("POST concurrente deja una sola membresía activa", async () => {
+test("POST concurrente deja una sola membresía pendiente", async () => {
   const employee = await createUser({ role: "employee" });
   const customer = await createUser();
   const planId = await createPlan();
@@ -237,16 +237,18 @@ test("POST concurrente deja una sola membresía activa", async () => {
     responses.map((response) => response.status).sort(),
     [201, 409],
   );
-  assert.equal(
-    responses.find((response) => response.status === 409)?.body.error.code,
-    "MEMBERSHIP_ALREADY_ACTIVE",
+  const rejected = responses.find((response) => response.status === 409);
+  assert.ok(
+    rejected?.body.error.code === "MEMBERSHIP_ALREADY_ACTIVE"
+    || rejected?.body.error.code === "MEMBERSHIP_PAYMENT_PENDING",
   );
 
-  const activeCount = runAdminQuery(
+  const pendingCount = runAdminQuery(
     `SELECT count(*) FROM public.subscriptions
-     WHERE user_id = '${customer.userId}' AND status = 'active';`,
+     WHERE user_id = '${customer.userId}' AND status = 'pending'
+       AND initial_collection_origin = 'customers';`,
   );
-  assert.equal(activeCount, "1");
+  assert.equal(pendingCount, "1");
 });
 
 test("renew exige una membresía previa", async () => {
@@ -268,18 +270,21 @@ test("renew reemplaza la activa transaccionalmente y conserva una sola activa", 
   const customer = await createUser();
   const planId = await createPlan();
   const cookie = await login(employee.email);
-  const created = await request(app)
-    .post(`/customers/${customer.userId}/membership`)
-    .set("Cookie", cookie)
-    .send({ plan_id: planId, cycles: 1, start_date: `${membershipYear}-08-01` });
-  assert.equal(created.status, 201);
+
+  // Insert an active membership directly (simulates one that was already paid).
+  const createdId = runAdminQuery(
+    `INSERT INTO public.subscriptions (user_id, plan_id, start_date, end_date, status, grace_days)
+     VALUES ('${customer.userId}', ${planId}, '${membershipYear}-08-01'::date,
+             '${membershipYear}-08-01'::date + 30, 'active', 3)
+     RETURNING id;`,
+  );
 
   const renewed = await request(app)
     .post(`/customers/${customer.userId}/membership/renew`)
     .set("Cookie", cookie)
     .send({ plan_id: planId, cycles: 2 });
   assert.equal(renewed.status, 201);
-  assert.equal(renewed.body.previous_membership_id, created.body.membership.id);
+  assert.equal(renewed.body.previous_membership_id, createdId);
   assert.equal(renewed.body.membership.start_date, `${membershipYear}-09-01`);
   assert.equal(renewed.body.membership.cycles, 2);
 

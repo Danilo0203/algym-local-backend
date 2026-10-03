@@ -178,6 +178,7 @@ async function getCurrentEffectiveMembership(
         s.status,
         (
           CASE
+            WHEN s.status = 'pending' THEN 'pending'
             WHEN s.status = 'cancelled' THEN 'cancelled'
             WHEN s.status = 'active' THEN
               CASE
@@ -193,7 +194,8 @@ async function getCurrentEffectiveMembership(
         s.created_at
       FROM public.subscriptions s
       JOIN public.plans pl ON s.plan_id = pl.id
-      WHERE s.user_id = $1 AND s.status = 'active'
+      WHERE s.user_id = $1 AND s.status IN ('active', 'pending')
+      ORDER BY CASE WHEN s.status = 'active' THEN 0 ELSE 1 END, s.created_at DESC
       LIMIT 1
     `,
     [customerId],
@@ -262,6 +264,7 @@ async function mapMembershipResponse(
         s.status,
         (
           CASE
+            WHEN s.status = 'pending' THEN 'pending'
             WHEN s.status = 'cancelled' THEN 'cancelled'
             WHEN s.status = 'active' THEN
               CASE
@@ -320,6 +323,7 @@ export async function createMembership(
       client,
       customerId,
       input,
+      true,
     );
 
     return {
@@ -333,6 +337,7 @@ export async function createMembershipForCustomerInTransaction(
   client: PoolClient,
   customerId: string,
   input: CreateMembershipInput,
+  initialFromCustomers = false,
 ): Promise<MembershipSummary> {
   const profile = await getCustomerProfileForMembership(client, customerId);
   if (!profile.is_active) {
@@ -351,6 +356,15 @@ export async function createMembershipForCustomerInTransaction(
     throw membershipAlreadyActiveError();
   }
 
+  const pending = await client.query(
+    `SELECT id FROM public.subscriptions WHERE user_id = $1
+       AND status = 'pending' AND initial_collection_origin = 'customers' LIMIT 1`,
+    [customerId],
+  );
+  if (pending.rows.length > 0) {
+    throw new AppError(409, "MEMBERSHIP_PAYMENT_PENDING", "Cobra primero la membresía pendiente");
+  }
+
   const startDate = await resolveCreateStartDate(client, input.start_date);
   const graceDays = 3;
 
@@ -360,10 +374,10 @@ export async function createMembershipForCustomerInTransaction(
     result = await client.query(
       `
         INSERT INTO public.subscriptions (
-          user_id, plan_id, start_date, end_date, status, grace_days
+          user_id, plan_id, start_date, end_date, status, grace_days, initial_collection_origin
         )
         VALUES (
-          $1, $2, $3::date, $3::date + ($4::int * $5::int), 'active', $6
+          $1, $2, $3::date, $3::date + ($4::int * $5::int), $7::public.sub_status, $6, $8
         )
         RETURNING id
       `,
@@ -374,6 +388,8 @@ export async function createMembershipForCustomerInTransaction(
         plan.duration_days,
         input.cycles,
         graceDays,
+        initialFromCustomers ? "pending" : "active",
+        initialFromCustomers ? "customers" : null,
       ],
     );
   } catch (error) {
@@ -388,6 +404,36 @@ export async function createMembershipForCustomerInTransaction(
   const summary = await mapMembershipResponse(client, membershipId);
 
   return summary;
+}
+
+export async function updatePendingMembership(actorUserId: string, customerId: string,
+  input: CreateMembershipInput): Promise<MembershipResponse> {
+  return withUserTransaction(actorUserId, async (client) => {
+    const auth = await getMembershipAuthorization(client);
+    assertMembershipWriteAccess(auth);
+    const profile = await getCustomerProfileForMembership(client, customerId);
+    if (!profile.is_active) throw new AppError(409, "CUSTOMER_INACTIVE", "El cliente está inactivo");
+    const plan = await getPlanForMembership(client, input.plan_id, true);
+    const pending = await client.query<{ id: string }>(
+      `SELECT id FROM public.subscriptions WHERE user_id = $1 AND status = 'pending'
+       AND initial_collection_origin = 'customers' FOR UPDATE`, [customerId],
+    );
+    const id = pending.rows[0]?.id;
+    if (!id) throw new AppError(409, "PENDING_MEMBERSHIP_NOT_FOUND", "No hay membresía inicial pendiente");
+    const hasPayment = await client.query(
+      `SELECT id FROM public.payments WHERE subscription_id = $1 LIMIT 1`, [id],
+    );
+    if (hasPayment.rows.length > 0) throw new AppError(409, "MEMBERSHIP_ALREADY_PAID", "Esta membresía ya tiene un pago");
+    const startDate = input.start_date ?? getGuatemalaToday();
+    const result = await client.query(
+      `UPDATE public.subscriptions SET plan_id = $2, start_date = $3::date,
+       end_date = $3::date + ($4::int * $5::int)
+       WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [id, plan.id, startDate, plan.duration_days, input.cycles],
+    );
+    if (!result.rows[0]) throw new AppError(409, "PENDING_MEMBERSHIP_NOT_FOUND", "La membresía ya no está pendiente");
+    return { customer_id: customerId, membership: await mapMembershipResponse(client, id) };
+  });
 }
 
 export async function renewMembership(
@@ -430,6 +476,15 @@ export async function renewMembership(
         "NO_MEMBERSHIP_TO_RENEW",
         "El cliente no tiene una membresía previa para renovar",
       );
+    }
+
+    const pending = await client.query(
+      `SELECT id FROM public.subscriptions WHERE user_id = $1
+         AND status = 'pending' AND initial_collection_origin = 'customers' LIMIT 1`,
+      [customerId],
+    );
+    if (pending.rows.length > 0) {
+      throw new AppError(409, "MEMBERSHIP_PAYMENT_PENDING", "Cobra primero la membresía pendiente");
     }
 
     const previousMembershipId = activeMembership?.id ?? latestMembershipId;
