@@ -436,6 +436,13 @@ const initialTrainingColumns = [
   "medical_clearance_notes",
 ] as const;
 
+const trainingHealthColumns = [
+  "primary_goal", "secondary_goal", "focus_areas", "experience_level",
+  "days_per_week", "session_minutes", "training_location", "equipment_available",
+  "activity_level", "cardio_preference", "exercise_preferences", "exercise_dislikes",
+  "injuries_or_pain", "parq_requires_attention", "medical_clearance_notes",
+] as const;
+
 async function syncTrainingProfileCompleteness(client: PoolClient, customerId: string): Promise<void> {
   const result = await client.query<{ is_complete: boolean }>(
     `SELECT COALESCE(
@@ -520,9 +527,22 @@ async function saveCashCustomerIntake(
     }
   }
 
-  if (intake.health_profile) {
+  // Caja guarda la ficha en dos tablas heredadas. La vista de Clientes lee
+  // customer_health_profiles y la generación de rutinas lee training_profiles.
+  // Completar una sola parte del contrato debe dejar ambas vistas coherentes.
+  const healthFromTraining: CustomerHealthProfileUpdateInput = {};
+  for (const column of trainingHealthColumns) {
+    const value = intake.training_profile?.[column];
+    if (value === undefined || (column === "session_minutes" && typeof value === "number" && value < 15)) continue;
+    Object.assign(healthFromTraining, { [column]: value });
+  }
+  if (intake.training_profile?.restricted_movements !== undefined) {
+    healthFromTraining.restricted_movements = intake.training_profile.restricted_movements.join(", ") || null;
+  }
+  const healthProfile = { ...healthFromTraining, ...intake.health_profile };
+  if (Object.keys(healthProfile).length > 0) {
     const columns = healthProfileColumns.filter(
-      (column) => intake.health_profile?.[column] !== undefined,
+      (column) => healthProfile[column] !== undefined,
     );
     const placeholders = columns.map((_, index) => `$${index + 2}`);
     const conflictClause = customer.accessContext === "existing"
@@ -533,7 +553,7 @@ async function saveCashCustomerIntake(
       `INSERT INTO public.customer_health_profiles (user_id, ${columns.join(", ")})
        VALUES ($1, ${placeholders.join(", ")})
        ${conflictClause}`,
-      [customerId, ...columns.map((column) => intake.health_profile?.[column])],
+      [customerId, ...columns.map((column) => healthProfile[column])],
     );
   }
 

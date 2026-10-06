@@ -222,6 +222,9 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   "ZZTEST PENDING COMPLETED:55554321:1994-03-05");
   assert.equal(adminSql(`SELECT injuries_or_pain FROM public.customer_health_profiles
     WHERE user_id = '${pendingCustomer.body.id}'`), "Molestia de hombro");
+  assert.equal(adminSql(`SELECT primary_goal || ':' || days_per_week::text
+    FROM public.customer_health_profiles WHERE user_id = '${pendingCustomer.body.id}'`),
+  "strength:3");
   assert.equal(adminSql(`SELECT primary_goal FROM public.training_profiles
     WHERE user_id = '${pendingCustomer.body.id}'`), "strength");
   assert.equal(adminSql(`SELECT source_event FROM public.training_nutrition_snapshots
