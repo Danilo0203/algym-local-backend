@@ -71,12 +71,15 @@ function detail(row: DetailRow) {
   };
 }
 
-async function requireAccess(client: PoolClient): Promise<void> {
+async function requireAccess(client: PoolClient, operation: "view" | "manage"): Promise<void> {
   const result = await client.query<{ permissions: string[] | null; is_owner: boolean }>(
     "SELECT public.get_current_permissions() AS permissions, public.is_owner() AS is_owner",
   );
-  if (!result.rows[0]?.is_owner && !result.rows[0]?.permissions?.includes("routines.view")) {
-    throw new AppError(403, "FORBIDDEN", "No autorizado para administrar plantillas de rutinas");
+  const current = result.rows[0];
+  const canView = current?.permissions?.includes("routines.view") ?? false;
+  const canManage = current?.permissions?.includes("routines.manage_blueprints") ?? false;
+  if (!current?.is_owner && (!canView || (operation === "manage" && !canManage))) {
+    throw new AppError(403, "FORBIDDEN", "No autorizado para esta operación de plantillas de rutinas");
   }
 }
 
@@ -92,7 +95,7 @@ async function findBlueprint(client: PoolClient, id: string, lock = false) {
 
 export async function listBlueprints(actorUserId: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "view");
     const result = await client.query<BlueprintRow & {
       day_count: string;
       exercise_count: string;
@@ -139,7 +142,7 @@ export async function listBlueprints(actorUserId: string) {
 
 export async function getBlueprint(actorUserId: string, id: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "view");
     const record = await findBlueprint(client, id);
     const details = await client.query<DetailRow>(`
       SELECT d.*, e.name AS exercise_name, e.display_name AS exercise_display_name,
@@ -177,7 +180,7 @@ export async function getBlueprint(actorUserId: string, id: string) {
 
 export async function createBlueprint(actorUserId: string, input: CreateBlueprintInput) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "manage");
     const result = await client.query<{ id: string }>(`
       INSERT INTO public.routine_blueprints
         (name, primary_goal, secondary_goal, created_by)
@@ -204,7 +207,7 @@ export async function createBlueprint(actorUserId: string, input: CreateBlueprin
 
 export async function saveRoutineAsBlueprint(actorUserId: string, routineId: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "manage");
     const source = await client.query<{
       id: string; name: string; primary_goal: string | null; secondary_goal: string | null;
       created_by: string | null; user_id: string | null; reviewed_at: Date | null;
@@ -252,7 +255,7 @@ export async function saveRoutineAsBlueprint(actorUserId: string, routineId: str
 
 export async function renameBlueprint(actorUserId: string, id: string, name: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "manage");
     const result = await client.query(`
       UPDATE public.routine_blueprints SET name = $2, updated_at = now()
       WHERE id = $1 RETURNING id
@@ -264,7 +267,7 @@ export async function renameBlueprint(actorUserId: string, id: string, name: str
 
 export async function assignBlueprint(actorUserId: string, id: string, customerId: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "manage");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [customerId]);
     const source = await findBlueprint(client, id, true);
     const customer = await client.query(`
@@ -302,7 +305,7 @@ export async function assignBlueprint(actorUserId: string, id: string, customerI
 
 export async function unassignBlueprint(actorUserId: string, id: string, customerId: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "manage");
     await findBlueprint(client, id);
     await client.query(`
       DELETE FROM public.routine_blueprint_assignments
@@ -314,7 +317,7 @@ export async function unassignBlueprint(actorUserId: string, id: string, custome
 
 export async function searchActiveClients(actorUserId: string, query: string) {
   return withUserTransaction(actorUserId, async (client) => {
-    await requireAccess(client);
+    await requireAccess(client, "manage");
     const escaped = query.replace(/[\\%_]/g, "\\$&");
     const result = await client.query<{
       id: string; full_name: string | null; avatar_url: string | null;

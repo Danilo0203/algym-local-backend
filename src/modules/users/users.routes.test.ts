@@ -288,21 +288,24 @@ test("un rol personalizado sin permisos no hereda accesos de empleado", async ()
   const routinePermissions = await request(app).get("/roles/permissions").set("Cookie", owner.cookie);
   assert.equal(routinePermissions.status, 200);
   const routineViewId = routinePermissions.body.data.find((item: { key: string }) => item.key === "routines.view")?.id;
-  assert.ok(routineViewId);
+  const routineManageId = routinePermissions.body.data.find((item: { key: string }) => item.key === "routines.manage_blueprints")?.id;
+  assert.ok(routineViewId && routineManageId);
   assert.equal((await request(app).patch(`/roles/${role.body.id}`).set("Cookie", owner.cookie)
-    .send({ permissionIds: [routineViewId] })).status, 200);
+    .send({ permissionIds: [routineViewId, routineManageId] })).status, 200);
   const routineLogin = await request(app).post("/auth/login").send({ email: writeEmail, password });
   assert.equal(routineLogin.status, 200);
   const routineCookie = routineLogin.headers["set-cookie"]?.[0];
   assert.ok(routineCookie);
-  const blueprint = await request(app).post("/routine-blueprints").set("Cookie", routineCookie).send({
+  const blueprintInput = {
     title: `ZZTEST LOCAL USERS BLUEPRINT ${randomUUID()}`,
     primary_goal: "strength", secondary_goal: null,
     days: [{ exercises: [{
       exercise_id: exercise.body.id, block_type: "strength", sets: 3,
       reps: "8-10", rest_seconds: 90, duration_minutes: null, target_rir: 2,
     }] }],
-  });
+  };
+  const blueprint = await request(app).post("/routine-blueprints").set("Cookie", routineCookie)
+    .send(blueprintInput);
   assert.equal(blueprint.status, 201, JSON.stringify(blueprint.body));
   createdBlueprintIds.push(blueprint.body.blueprintId as string);
   const visibleBlueprints = await request(app).get("/routine-blueprints").set("Cookie", routineCookie);

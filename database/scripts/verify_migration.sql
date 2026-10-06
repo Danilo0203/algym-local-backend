@@ -98,6 +98,46 @@ BEGIN
 END;
 $$;
 
+DO $$
+DECLARE
+  restricted_policies integer;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.permissions WHERE key = 'routines.manage_blueprints'
+  ) THEN
+    RAISE EXCEPTION 'Falta el permiso de administración de plantillas';
+  END IF;
+
+  SELECT count(*) INTO restricted_policies
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND (tablename, policyname) IN (
+      ('routine_blueprints', 'local_blueprints_write'),
+      ('routine_blueprint_details', 'local_blueprint_details_write'),
+      ('routine_blueprint_assignments', 'local_blueprint_assignments_write'),
+      ('routines', 'local_blueprints_routines_insert'),
+      ('routines', 'local_blueprints_routines_update'),
+      ('routine_details', 'local_blueprints_routine_details_insert')
+    )
+    AND coalesce(qual, '') || coalesce(with_check, '') LIKE '%routines.manage_blueprints%';
+  IF restricted_policies <> 6 THEN
+    RAISE EXCEPTION 'Faltan políticas de escritura limitadas a plantillas: % de 6', restricted_policies;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND policyname IN (
+        'local_blueprints_all',
+        'local_blueprint_details_all',
+        'local_blueprint_assignments_all'
+      )
+  ) THEN
+    RAISE EXCEPTION 'Persisten políticas que conceden escritura con routines.view';
+  END IF;
+END;
+$$;
+
 SELECT
   'auth_profile_consistency' AS check_name,
   json_build_object(

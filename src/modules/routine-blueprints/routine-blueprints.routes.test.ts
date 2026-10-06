@@ -11,6 +11,7 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/pool.js";
+import { withUserTransaction } from "../../db/transaction.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const testEmailDomain = "@routine-blueprints.test.local";
@@ -60,6 +61,12 @@ after(async () => {
     (SELECT id FROM auth.users WHERE email LIKE $1)`, [`%${testEmailDomain}`]);
   await pool.query("DELETE FROM auth.users WHERE email LIKE $1", [`%${testEmailDomain}`]);
   adminSql(`
+    DELETE FROM public.role_permissions AS role_permission
+    USING public.roles AS role, public.permissions AS permission
+    WHERE role_permission.role_id = role.id
+      AND role_permission.permission_id = permission.id
+      AND role.slug = 'employee'
+      AND permission.key = 'routines.manage_blueprints';
     DELETE FROM public.role_permissions
     WHERE permission_id IN (SELECT id FROM public.permissions WHERE key = 'routines.view');
     DELETE FROM public.permissions WHERE key = 'routines.view'
@@ -114,6 +121,27 @@ test("plantillas locales: permisos, creación, asignación atómica y consulta",
   assert.equal(listed.day_count, 1);
   assert.equal(listed.exercise_count, 1);
   assert.equal((await request(app).get("/routine-blueprints").set("Cookie", employee.cookie)).status, 200);
+  assert.equal((await request(app).get(`/routine-blueprints/${blueprintId}`)
+    .set("Cookie", employee.cookie)).status, 200);
+  assert.equal((await request(app).get("/routine-blueprints/clients?query=ZZTEST")
+    .set("Cookie", employee.cookie)).status, 403);
+  assert.equal((await request(app).post("/routine-blueprints")
+    .set("Cookie", employee.cookie).send(body)).status, 403);
+  assert.equal((await request(app).patch(`/routine-blueprints/${blueprintId}`)
+    .set("Cookie", employee.cookie).send({ name: "No autorizado" })).status, 403);
+  assert.equal((await request(app).post(`/routine-blueprints/${blueprintId}/assign`)
+    .set("Cookie", employee.cookie).send({ userId: customer.userId })).status, 403);
+  const directWrite = await withUserTransaction(employee.userId, (client) =>
+    client.query("UPDATE public.routine_blueprints SET name = $2 WHERE id = $1", [blueprintId, "No autorizado"]),
+  );
+  assert.equal(directWrite.rowCount, 0);
+  adminSql(`
+    INSERT INTO public.role_permissions (role_id, permission_id)
+    SELECT role.id, permission.id FROM public.roles AS role
+    JOIN public.permissions AS permission ON permission.key = 'routines.manage_blueprints'
+    WHERE role.slug = 'employee'
+    ON CONFLICT DO NOTHING
+  `);
 
   const first = await request(app).post(`/routine-blueprints/${blueprintId}/assign`)
     .set("Cookie", employee.cookie).send({ userId: customer.userId });
