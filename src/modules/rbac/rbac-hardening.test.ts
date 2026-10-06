@@ -803,10 +803,8 @@ test("las funciones privilegiadas no conservan ACL accidental", async () => {
 
   for (const privilege of effectiveSchemaPrivileges.rows) {
     const expectedUsage =
-      privilege.schemaName === "private"
-        ? privilege.roleName === "algym_app" ||
-          privilege.roleName === "algym_migrator"
-        : true;
+      privilege.roleName === "algym_app" ||
+      privilege.roleName === "algym_migrator";
     assert.equal(
       privilege.canUse,
       expectedUsage,

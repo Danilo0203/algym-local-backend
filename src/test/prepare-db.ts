@@ -449,3 +449,10 @@ runCommand("psql", [
   "-v", "ON_ERROR_STOP=1",
   "-f", path.join(migrationDirectory, "0033_local_function_execute_acl.sql"),
 ]);
+
+runCommand("psql", [
+  ...connectionArguments,
+  "-d", targetDatabaseName,
+  "-v", "ON_ERROR_STOP=1",
+  "-f", path.join(migrationDirectory, "0034_local_relation_acl.sql"),
+]);

@@ -42,6 +42,62 @@ BEGIN
 END;
 $$;
 
+DO $$
+DECLARE
+  exposed_count integer;
+BEGIN
+  SELECT count(*) INTO exposed_count
+  FROM pg_namespace AS schema
+  CROSS JOIN pg_roles AS role
+  WHERE schema.nspname IN ('public', 'auth')
+    AND role.rolname IN ('anon', 'authenticated', 'service_role')
+    AND has_schema_privilege(role.oid, schema.oid, 'USAGE');
+  IF exposed_count > 0 THEN
+    RAISE EXCEPTION '% accesos heredados a esquemas locales', exposed_count;
+  END IF;
+
+  SELECT count(*) INTO exposed_count
+  FROM pg_class AS relation
+  CROSS JOIN LATERAL aclexplode(coalesce(relation.relacl, '{}'::aclitem[])) AS privilege
+  WHERE relation.relnamespace IN ('public'::regnamespace, 'auth'::regnamespace)
+    AND relation.relkind IN ('r', 'p', 'v', 'S')
+    AND privilege.grantee IN (
+      0, 'anon'::regrole, 'authenticated'::regrole, 'service_role'::regrole
+    );
+  IF exposed_count > 0 THEN
+    RAISE EXCEPTION '% permisos heredados en tablas, vistas o secuencias', exposed_count;
+  END IF;
+
+  SELECT count(*) INTO exposed_count
+  FROM pg_proc AS routine
+  CROSS JOIN LATERAL aclexplode(coalesce(routine.proacl, '{}'::aclitem[])) AS privilege
+  WHERE routine.pronamespace IN ('public'::regnamespace, 'auth'::regnamespace)
+    AND routine.proowner = 'algym_migrator'::regrole
+    AND privilege.grantee IN (
+      0, 'anon'::regrole, 'authenticated'::regrole, 'service_role'::regrole
+    );
+  IF exposed_count > 0 THEN
+    RAISE EXCEPTION '% permisos heredados en funciones de negocio', exposed_count;
+  END IF;
+
+  SELECT count(*) INTO exposed_count
+  FROM pg_default_acl AS default_acl
+  CROSS JOIN LATERAL aclexplode(default_acl.defaclacl) AS privilege
+  WHERE default_acl.defaclrole = 'algym_migrator'::regrole
+    AND privilege.grantee IN (
+      0, 'anon'::regrole, 'authenticated'::regrole, 'service_role'::regrole
+    );
+  IF exposed_count > 0 THEN
+    RAISE EXCEPTION '% permisos predeterminados heredados del migrador', exposed_count;
+  END IF;
+
+  IF NOT has_schema_privilege('algym_sync', 'auth', 'USAGE')
+     OR NOT has_function_privilege('algym_sync', 'auth.uid()'::regprocedure, 'EXECUTE') THEN
+    RAISE EXCEPTION 'El rol algym_sync necesita auth.uid() para sus políticas RLS';
+  END IF;
+END;
+$$;
+
 SELECT
   'auth_profile_consistency' AS check_name,
   json_build_object(
