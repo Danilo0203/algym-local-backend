@@ -8,6 +8,40 @@ SELECT 'public_policies' AS check_name, count(*)::text AS result
 FROM pg_policies
 WHERE schemaname = 'public';
 
+DO $$
+DECLARE
+  tables_without_rls text;
+  broadly_executable_functions text;
+BEGIN
+  SELECT string_agg(relation.relname, ', ' ORDER BY relation.relname)
+  INTO tables_without_rls
+  FROM pg_class AS relation
+  WHERE relation.relnamespace = 'public'::regnamespace
+    AND relation.relkind IN ('r', 'p')
+    AND NOT relation.relrowsecurity;
+
+  IF tables_without_rls IS NOT NULL THEN
+    RAISE EXCEPTION 'Tablas públicas sin RLS: %', tables_without_rls;
+  END IF;
+
+  SELECT string_agg(routine.oid::regprocedure::text, ', ' ORDER BY routine.oid::regprocedure::text)
+  INTO broadly_executable_functions
+  FROM pg_proc AS routine
+  WHERE routine.pronamespace = 'public'::regnamespace
+    AND routine.prosecdef
+    AND (
+      has_function_privilege('public', routine.oid, 'EXECUTE')
+      OR has_function_privilege('anon', routine.oid, 'EXECUTE')
+      OR has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+      OR has_function_privilege('service_role', routine.oid, 'EXECUTE')
+    );
+
+  IF broadly_executable_functions IS NOT NULL THEN
+    RAISE EXCEPTION 'Funciones privilegiadas con EXECUTE heredado: %', broadly_executable_functions;
+  END IF;
+END;
+$$;
+
 SELECT
   'auth_profile_consistency' AS check_name,
   json_build_object(
