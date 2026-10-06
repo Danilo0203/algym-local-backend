@@ -51,6 +51,13 @@ export const createMembershipSchema = z
   })
   .strict() satisfies z.ZodType<CreateMembershipInput>;
 
+export const updatePendingMembershipSchema = createMembershipSchema
+  .extend({
+    end_date: z.string().refine(isValidCalendarDate, "Fecha inválida").optional(),
+  })
+  .refine((value) => !value.start_date || !value.end_date || value.end_date > value.start_date,
+    { message: "La fecha final debe ser posterior al inicio", path: ["end_date"] });
+
 export const renewMembershipSchema = z
   .object({
     plan_id: z.number().int().positive(),

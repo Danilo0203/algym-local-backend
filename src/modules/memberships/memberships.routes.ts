@@ -10,6 +10,7 @@ import {
   cancelMembershipSchema,
   createMembershipSchema,
   renewMembershipSchema,
+  updatePendingMembershipSchema,
 } from "./memberships.schemas.js";
 import {
   cancelMembership,
@@ -66,7 +67,7 @@ membershipsRouter.patch("/pending", async (request, response, next) => {
   try {
     const session = await validateSessionToken(readSessionTokenFromRequest(request));
     const customerId = customerIdParamSchema.parse((request.params as { id: string }).id);
-    const input = createMembershipSchema.parse(request.body);
+    const input = updatePendingMembershipSchema.parse(request.body);
     response.status(200).json(await updatePendingMembership(session.userId, customerId, input));
   } catch (error) { next(error); }
 });

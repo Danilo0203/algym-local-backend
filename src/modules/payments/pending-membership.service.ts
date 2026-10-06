@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { updateRenewedCustomerIntake } from "../customers/customers-health.service.js";
 import { collectPendingMembershipSchema } from "./payments.schemas.js";
 
 type CollectionInput = z.infer<typeof collectPendingMembershipSchema>;
@@ -18,7 +19,7 @@ const eligible = `s.status = 'pending' AND s.initial_collection_origin = 'custom
 
 const pendingColumns = `s.id, s.user_id AS customer_id, p.full_name, p.phone,
   s.plan_id::text, pl.name AS plan_name, s.start_date::text, s.end_date::text,
-  (pl.price * GREATEST(1, ROUND((s.end_date - s.start_date)::numeric / pl.duration_days)))::text AS amount_original`;
+  (pl.price * GREATEST(1, CEIL((s.end_date - s.start_date)::numeric / pl.duration_days)))::text AS amount_original`;
 
 async function assertCashAccess(client: import("pg").PoolClient) {
   const { rows } = await client.query<{ is_owner: boolean; permissions: string[] | null }>(
@@ -112,6 +113,9 @@ export async function collectPendingMembership(actorUserId: string, membershipId
     }
     await client.query(`UPDATE public.subscriptions SET status = 'active',
       discount_amount = $2 WHERE id = $1`, [membershipId, input.discountAmount]);
+    if (input.intake) {
+      await updateRenewedCustomerIntake(client, membership.customer_id, input.intake, membershipId, "signup");
+    }
     await client.query(`SELECT private.create_pending_routine_for_cash_payment($1::uuid)`, [paymentId]);
     return { customer_id: membership.customer_id, subscription_id: membershipId,
       payment_id: paymentId, cash_movement_id: movement.rows[0].id,

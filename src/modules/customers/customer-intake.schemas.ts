@@ -54,6 +54,10 @@ export const customerIntakeSchema = z.object({
 export type CustomerIntakeInput = z.infer<typeof customerIntakeSchema>;
 
 const renewalProfileUpdateSchema = z.object({
+  full_name: z.string().trim().min(2).max(200).optional(),
+  phone: z.string().trim().min(1).max(40).optional(),
+  birth_date: z.iso.date().optional(),
+  gender: z.enum(["male", "female", "other"]).optional(),
   injuries: nullableText,
   medical_notes: nullableText,
 }).strict().refine((value) => Object.keys(value).length > 0, {

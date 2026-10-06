@@ -63,6 +63,7 @@ export const pendingMembershipQuerySchema = z.object({
 export const collectPendingMembershipSchema = z.object({
   discountAmount: money.default(0),
   paymentMethod: z.enum(["cash", "card", "transfer"]).default("cash"),
+  intake: customerRenewalIntakeSchema.optional(),
 }).strict();
 
 export const paymentIdSchema = z.string().uuid();

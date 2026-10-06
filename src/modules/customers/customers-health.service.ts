@@ -496,17 +496,18 @@ async function saveCashCustomerIntake(
     gender: "male" | "female" | "other";
     subscriptionId: string;
     sourceEvent: "signup" | "renewal";
+    accessContext: "new" | "existing";
   },
 ): Promise<void> {
   await client.query(
-    customer.sourceEvent === "signup"
+    customer.accessContext === "new"
       ? "SELECT set_config('app.new_cash_customer_id', $1, true)"
       : "SELECT set_config('app.cash_renew_customer_id', $1, true)",
     [customerId],
   );
 
   if ("profile_update" in intake && intake.profile_update) {
-    const columns = ["injuries", "medical_notes"] as const;
+    const columns = ["full_name", "phone", "birth_date", "gender", "injuries", "medical_notes"] as const;
     const updatedColumns = columns.filter((column) => intake.profile_update?.[column] !== undefined);
     const result = await client.query(
       `UPDATE public.profiles
@@ -524,7 +525,7 @@ async function saveCashCustomerIntake(
       (column) => intake.health_profile?.[column] !== undefined,
     );
     const placeholders = columns.map((_, index) => `$${index + 2}`);
-    const conflictClause = customer.sourceEvent === "renewal"
+    const conflictClause = customer.accessContext === "existing"
       ? `ON CONFLICT (user_id) DO UPDATE
          SET ${columns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}`
       : "";
@@ -604,7 +605,7 @@ async function saveCashCustomerIntake(
       (column) => intake.training_profile?.[column] !== undefined,
     );
     const placeholders = columns.map((_, index) => `$${index + 2}`);
-    const conflictClause = customer.sourceEvent === "renewal"
+    const conflictClause = customer.accessContext === "existing"
       ? `ON CONFLICT (user_id) DO UPDATE
          SET ${columns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}`
       : "";
@@ -628,6 +629,7 @@ export async function insertInitialCustomerIntake(
   return saveCashCustomerIntake(client, customerId, intake, {
     ...customer,
     sourceEvent: "signup",
+    accessContext: "new",
   });
 }
 
@@ -636,6 +638,7 @@ export async function updateRenewedCustomerIntake(
   customerId: string,
   intake: CustomerRenewalIntakeInput,
   subscriptionId: string,
+  sourceEvent: "signup" | "renewal" = "renewal",
 ): Promise<void> {
   const result = await client.query<{
     birth_date: string;
@@ -651,10 +654,11 @@ export async function updateRenewedCustomerIntake(
     throw new AppError(404, "CUSTOMER_NOT_FOUND", "Cliente no encontrado");
   }
   await saveCashCustomerIntake(client, customerId, intake, {
-    birthDate: customer.birth_date,
-    gender: customer.gender,
+    birthDate: intake.profile_update?.birth_date ?? customer.birth_date,
+    gender: intake.profile_update?.gender ?? customer.gender,
     subscriptionId,
-    sourceEvent: "renewal",
+    sourceEvent,
+    accessContext: "existing",
   });
 }
 

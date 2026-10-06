@@ -407,15 +407,15 @@ export async function createMembershipForCustomerInTransaction(
 }
 
 export async function updatePendingMembership(actorUserId: string, customerId: string,
-  input: CreateMembershipInput): Promise<MembershipResponse> {
+  input: CreateMembershipInput & { end_date?: string }): Promise<MembershipResponse> {
   return withUserTransaction(actorUserId, async (client) => {
     const auth = await getMembershipAuthorization(client);
     assertMembershipWriteAccess(auth);
     const profile = await getCustomerProfileForMembership(client, customerId);
     if (!profile.is_active) throw new AppError(409, "CUSTOMER_INACTIVE", "El cliente está inactivo");
     const plan = await getPlanForMembership(client, input.plan_id, true);
-    const pending = await client.query<{ id: string }>(
-      `SELECT id FROM public.subscriptions WHERE user_id = $1 AND status = 'pending'
+    const pending = await client.query<{ id: string; start_date: string }>(
+      `SELECT id, start_date::text FROM public.subscriptions WHERE user_id = $1 AND status = 'pending'
        AND initial_collection_origin = 'customers' FOR UPDATE`, [customerId],
     );
     const id = pending.rows[0]?.id;
@@ -424,12 +424,15 @@ export async function updatePendingMembership(actorUserId: string, customerId: s
       `SELECT id FROM public.payments WHERE subscription_id = $1 LIMIT 1`, [id],
     );
     if (hasPayment.rows.length > 0) throw new AppError(409, "MEMBERSHIP_ALREADY_PAID", "Esta membresía ya tiene un pago");
-    const startDate = input.start_date ?? getGuatemalaToday();
+    const startDate = input.start_date ?? pending.rows[0]!.start_date;
+    if (input.end_date && input.end_date <= startDate) {
+      throw new AppError(400, "INVALID_DATE_RANGE", "La fecha final debe ser posterior al inicio");
+    }
     const result = await client.query(
       `UPDATE public.subscriptions SET plan_id = $2, start_date = $3::date,
-       end_date = $3::date + ($4::int * $5::int)
+       end_date = COALESCE($6::date, $3::date + ($4::int * $5::int))
        WHERE id = $1 AND status = 'pending' RETURNING id`,
-      [id, plan.id, startDate, plan.duration_days, input.cycles],
+      [id, plan.id, startDate, plan.duration_days, input.cycles, input.end_date ?? null],
     );
     if (!result.rows[0]) throw new AppError(409, "PENDING_MEMBERSHIP_NOT_FOUND", "La membresía ya no está pendiente");
     return { customer_id: customerId, membership: await mapMembershipResponse(client, id) };

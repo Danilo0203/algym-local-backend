@@ -184,6 +184,10 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(pendingList.status, 200, JSON.stringify(pendingList.body));
   assert.deepEqual(pendingList.body.data.map((row: { id: string }) => row.id), [pendingId]);
   assert.equal(pendingList.body.data[0].amount_original, 125);
+  const planOnly = await request(app).patch(`/customers/${pendingCustomer.body.id}/membership/pending`)
+    .set("Cookie", owner.cookie).send({ plan_id: planId, cycles: 1 });
+  assert.equal(planOnly.status, 200, JSON.stringify(planOnly.body));
+  assert.equal(planOnly.body.membership.start_date, pendingStart);
   const revised = await request(app).patch(`/customers/${pendingCustomer.body.id}/membership/pending`)
     .set("Cookie", owner.cookie).send({ plan_id: planId, cycles: 1, start_date: revisedStart });
   assert.equal(revised.status, 200, JSON.stringify(revised.body));
@@ -191,7 +195,20 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal((await request(app).post(`/payments/membership/pending/${pendingId}/collect`)
     .set("Cookie", customer.cookie).send({})).status, 403);
   const collected = await request(app).post(`/payments/membership/pending/${pendingId}/collect`)
-    .set("Cookie", employee.cookie).send({ discountAmount: 5, paymentMethod: "cash" });
+    .set("Cookie", employee.cookie).send({
+      discountAmount: 5, paymentMethod: "cash",
+      intake: {
+        profile_update: { full_name: "ZZTEST PENDING COMPLETED", phone: "55554321",
+          birth_date: "1994-03-05", gender: "female" },
+        health_profile: { injuries_or_pain: "Molestia de hombro" },
+        body_assessment: { weight_kg: 72, height_cm: 170,
+          nutrition_snapshot: { body_type: "mesomorph", diet_type: "normocalorica",
+            activity_level: "3_5_dias" } },
+        training_profile: { primary_goal: "strength", focus_areas: ["lower_body"],
+          experience_level: "beginner", days_per_week: 3, session_minutes: 45,
+          training_location: "gym", activity_level: "3_5_dias", cardio_preference: "light" },
+      },
+    });
   assert.equal(collected.status, 201, JSON.stringify(collected.body));
   assert.equal(collected.body.subscription_id, pendingId);
   assert.equal(adminSql(`SELECT status::text || ':' || start_date::text || ':' || end_date::text
@@ -200,12 +217,63 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
     WHERE id = '${collected.body.payment_id}'`), `${pendingId}:120.00`);
   assert.equal(adminSql(`SELECT cash_session_id::text FROM public.cash_movements
     WHERE id = '${collected.body.cash_movement_id}'`), opened.body.id);
+  assert.equal(adminSql(`SELECT full_name || ':' || phone || ':' || birth_date::text
+    FROM public.profiles WHERE id = '${pendingCustomer.body.id}'`),
+  "ZZTEST PENDING COMPLETED:55554321:1994-03-05");
+  assert.equal(adminSql(`SELECT injuries_or_pain FROM public.customer_health_profiles
+    WHERE user_id = '${pendingCustomer.body.id}'`), "Molestia de hombro");
+  assert.equal(adminSql(`SELECT primary_goal FROM public.training_profiles
+    WHERE user_id = '${pendingCustomer.body.id}'`), "strength");
+  assert.equal(adminSql(`SELECT source_event FROM public.training_nutrition_snapshots
+    WHERE user_id = '${pendingCustomer.body.id}' AND subscription_id = '${pendingId}'`), "signup");
   assert.equal((await request(app).post(`/payments/membership/pending/${pendingId}/collect`)
     .set("Cookie", employee.cookie).send({})).status, 409);
   assert.equal((await request(app).patch(`/customers/${pendingCustomer.body.id}/membership/pending`)
     .set("Cookie", owner.cookie).send({ plan_id: planId, cycles: 1 })).status, 409);
   assert.equal((await request(app).get("/payments/membership/pending")
     .set("Cookie", employee.cookie)).body.data.length, 0);
+
+  const rollbackCustomer = await request(app).post("/customers")
+    .set("Cookie", owner.cookie).send({
+      full_name: "ZZTEST PENDING ROLLBACK", phone: "55558765",
+      birth_date: "1995-03-05", gender: "female",
+      email: `pending-rollback-${randomUUID()}${domain}`,
+      membership: { plan_id: planId, cycles: 1, start_date: pendingStart },
+    });
+  assert.equal(rollbackCustomer.status, 201, JSON.stringify(rollbackCustomer.body));
+  const rollbackMembershipId = adminSql(`SELECT id FROM public.subscriptions
+    WHERE user_id = '${rollbackCustomer.body.id}'`);
+  const longEnd = adminSql(`SELECT ((now() AT TIME ZONE 'America/Guatemala')::date + 38)::text`);
+  const adjusted = await request(app).patch(`/customers/${rollbackCustomer.body.id}/membership/pending`)
+    .set("Cookie", owner.cookie).send({
+      plan_id: planId, cycles: 2, start_date: pendingStart, end_date: longEnd,
+    });
+  assert.equal(adjusted.status, 200, JSON.stringify(adjusted.body));
+  assert.equal(adminSql(`SELECT end_date::text FROM public.subscriptions
+    WHERE id = '${rollbackMembershipId}'`), longEnd);
+  const longPending = await request(app).get("/payments/membership/pending")
+    .set("Cookie", employee.cookie);
+  assert.equal(longPending.body.data.find((item: { id: string }) => item.id === rollbackMembershipId)
+    ?.amount_original, 250);
+  adminSql(`ALTER TABLE public.training_profiles ADD CONSTRAINT paid_pending_intake_rollback_test
+    CHECK (user_id <> '${rollbackCustomer.body.id}');`);
+  try {
+    const rejected = await request(app).post(`/payments/membership/pending/${rollbackMembershipId}/collect`)
+      .set("Cookie", employee.cookie).send({
+        intake: { training_profile: { primary_goal: "strength" } },
+      });
+    assert.equal(rejected.status, 500, JSON.stringify(rejected.body));
+    assert.equal(adminSql(`SELECT status::text FROM public.subscriptions
+      WHERE id = '${rollbackMembershipId}'`), "pending");
+    assert.equal(adminSql(`SELECT count(*) FROM public.payments
+      WHERE subscription_id = '${rollbackMembershipId}'`), "0");
+    assert.equal(adminSql(`SELECT count(*) FROM public.cash_movements
+      WHERE customer_id = '${rollbackCustomer.body.id}'`), "0");
+    assert.equal(adminSql(`SELECT count(*) FROM public.routines
+      WHERE user_id = '${rollbackCustomer.body.id}'`), "0");
+  } finally {
+    adminSql("ALTER TABLE public.training_profiles DROP CONSTRAINT paid_pending_intake_rollback_test;");
+  }
 
   const created = await request(app).post("/payments/membership")
     .set("Cookie", employee.cookie).send(input);
