@@ -1,0 +1,58 @@
+BEGIN;
+
+-- El esquema histórico de Supabase no incluía los datos de permissions.
+-- Completar el catálogo sin cambiar metadatos ni concesiones de una copia restaurada.
+INSERT INTO public.permissions (key, description, module, action)
+VALUES
+  ('attendance.view', 'Ver asistencias', 'attendance', 'view'),
+  ('body_assessments.manage', 'Permite crear y editar evaluaciones corporales de clientes', 'body_assessments', 'manage'),
+  ('body_assessments.view', 'Permite consultar evaluaciones corporales de clientes', 'body_assessments', 'view'),
+  ('cash.close_without_admin_password', 'Cerrar caja sin contraseña de administrador', 'cash', 'close_without_admin_password'),
+  ('cash.operate', 'Operar caja (abrir/cerrar/movimientos)', 'cash', 'operate'),
+  ('cash.reverse_payment', 'Revertir pagos', 'cash', 'reverse_payment'),
+  ('cash.view', 'Ver caja', 'cash', 'view'),
+  ('customer_health_profiles.manage', 'Permite crear y editar perfiles de salud de clientes', 'customer_health_profiles', 'manage'),
+  ('customer_health_profiles.view', 'Permite consultar perfiles de salud de clientes', 'customer_health_profiles', 'view'),
+  ('customers.create', 'Permite registrar clientes', 'customers', 'create'),
+  ('customers.manage_account', 'Permite administrar cuentas y credenciales de clientes', 'customers', 'manage_account'),
+  ('customers.manage_membership', 'Permite administrar membresías de clientes', 'customers', 'manage_membership'),
+  ('customers.manage_routine', 'Gestionar rutinas', 'customers', 'manage_routine'),
+  ('customers.update', 'Permite editar clientes', 'customers', 'update'),
+  ('customers.view', 'Permite consultar clientes', 'customers', 'view'),
+  ('dashboard.view', 'Ver tablero', 'dashboard', 'view'),
+  ('exercises.create', 'Crear ejercicios', 'exercises', 'create'),
+  ('exercises.delete', 'Eliminar ejercicios', 'exercises', 'delete'),
+  ('exercises.update', 'Editar ejercicios', 'exercises', 'update'),
+  ('exercises.view', 'Ver ejercicios', 'exercises', 'view'),
+  ('inventory.adjust', 'Registrar entradas, salidas y ajustes de inventario', 'inventory', 'adjust'),
+  ('inventory.sell', 'Vender productos desde caja', 'inventory', 'sell'),
+  ('inventory.view', 'Ver inventario', 'inventory', 'view'),
+  ('messages.create', 'Crear mensajes', 'messages', 'create'),
+  ('messages.delete', 'Eliminar mensajes', 'messages', 'delete'),
+  ('messages.update', 'Editar mensajes', 'messages', 'update'),
+  ('messages.use', 'Usar mensajes (enviar a clientes)', 'messages', 'use'),
+  ('messages.view', 'Ver mensajes', 'messages', 'view'),
+  ('payments.view', 'Ver pagos', 'payments', 'view'),
+  ('plans.create', 'Permite crear planes de membresía', 'plans', 'create'),
+  ('plans.delete', 'Permite desactivar planes de membresía', 'plans', 'delete'),
+  ('plans.update', 'Permite editar planes de membresía', 'plans', 'update'),
+  ('plans.view', 'Permite visualizar los planes de membresía', 'plans', 'view'),
+  ('products.create', 'Crear productos', 'products', 'create'),
+  ('products.delete', 'Desactivar productos', 'products', 'delete'),
+  ('products.update', 'Editar productos', 'products', 'update'),
+  ('products.view', 'Ver productos', 'products', 'view'),
+  ('profile.update', 'Editar perfil propio', 'profile', 'update'),
+  ('profile.view', 'Ver perfil propio', 'profile', 'view'),
+  ('roles.create', 'Crear roles', 'roles', 'create'),
+  ('roles.delete', 'Eliminar roles', 'roles', 'delete'),
+  ('roles.update', 'Editar roles', 'roles', 'update'),
+  ('roles.view', 'Ver roles', 'roles', 'view'),
+  ('routines.manage_blueprints', 'Crear, editar y asignar plantillas de rutina', 'routines', 'manage'),
+  ('routines.view', 'Ver rutinas', 'routines', 'view'),
+  ('users.create', 'Crear usuarios', 'users', 'create'),
+  ('users.delete', 'Eliminar usuarios', 'users', 'delete'),
+  ('users.update', 'Editar usuarios', 'users', 'update'),
+  ('users.view', 'Ver usuarios', 'users', 'view')
+ON CONFLICT (key) DO NOTHING;
+
+COMMIT;

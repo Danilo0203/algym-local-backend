@@ -66,10 +66,7 @@ after(async () => {
     WHERE role_permission.role_id = role.id
       AND role_permission.permission_id = permission.id
       AND role.slug = 'employee'
-      AND permission.key = 'routines.manage_blueprints';
-    DELETE FROM public.role_permissions
-    WHERE permission_id IN (SELECT id FROM public.permissions WHERE key = 'routines.view');
-    DELETE FROM public.permissions WHERE key = 'routines.view'
+      AND permission.key IN ('routines.manage_blueprints', 'routines.view');
   `);
   await pool.end();
 });

@@ -138,6 +138,25 @@ BEGIN
 END;
 $$;
 
+DO $$
+DECLARE
+  required_count integer;
+BEGIN
+  SELECT count(*) INTO required_count
+  FROM public.permissions
+  WHERE key IN (
+    'attendance.view', 'cash.close_without_admin_password', 'cash.view',
+    'exercises.delete', 'exercises.update', 'exercises.view',
+    'messages.create', 'messages.delete', 'messages.update', 'messages.use', 'messages.view',
+    'products.delete', 'roles.create', 'roles.delete', 'roles.update',
+    'users.create', 'users.delete', 'users.update'
+  );
+  IF required_count <> 18 THEN
+    RAISE EXCEPTION 'Catálogo de permisos locales incompleto: % de 18 claves heredadas', required_count;
+  END IF;
+END;
+$$;
+
 SELECT
   'auth_profile_consistency' AS check_name,
   json_build_object(

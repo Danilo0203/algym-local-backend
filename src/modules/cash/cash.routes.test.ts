@@ -15,6 +15,7 @@ import { withUserTransaction } from "../../db/transaction.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const password = "CashTestPassword123";
 const domain = "@cash.test.local";
+const insertedGrantPairs: string[] = [];
 
 function adminSql(sql: string): string {
   return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql], {
@@ -43,14 +44,12 @@ async function createUser(role: "client" | "employee" | "admin" | "owner") {
 }
 
 before(() => {
-  adminSql(`INSERT INTO public.permissions (key, description, module, action)
-    VALUES ('cash.view', 'Prueba caja local', 'cash', 'view'),
-           ('cash.operate', 'Prueba caja local', 'cash', 'operate')
-    ON CONFLICT (key) DO NOTHING;
-    INSERT INTO public.role_permissions (role_id, permission_id)
+  const inserted = adminSql(`INSERT INTO public.role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM public.roles AS r CROSS JOIN public.permissions AS p
     WHERE r.slug IN ('admin', 'employee') AND p.key IN ('cash.view', 'cash.operate')
-    ON CONFLICT (role_id, permission_id) DO NOTHING;`);
+    ON CONFLICT (role_id, permission_id) DO NOTHING
+    RETURNING role_id::text || ':' || permission_id::text;`);
+  insertedGrantPairs.push(...inserted.split("\n").filter(Boolean));
 });
 
 after(async () => {
@@ -61,9 +60,11 @@ after(async () => {
     DELETE FROM public.cash_registers WHERE name = 'Caja principal';
     DELETE FROM public.profiles
     WHERE id IN (SELECT id FROM auth.users WHERE email LIKE '%${domain}');`);
-  adminSql(`DELETE FROM public.role_permissions WHERE permission_id IN
-    (SELECT id FROM public.permissions WHERE key IN ('cash.view', 'cash.operate'));
-    DELETE FROM public.permissions WHERE key IN ('cash.view', 'cash.operate');`);
+  if (insertedGrantPairs.length > 0) {
+    adminSql(`DELETE FROM public.role_permissions
+      WHERE role_id::text || ':' || permission_id::text IN
+        (${insertedGrantPairs.map((pair) => `'${pair}'`).join(",")});`);
+  }
   await pool.query(`DELETE FROM auth.sessions WHERE user_id IN
     (SELECT id FROM auth.users WHERE email LIKE $1)`, [`%${domain}`]);
   await pool.query("DELETE FROM auth.users WHERE email LIKE $1", [`%${domain}`]);
