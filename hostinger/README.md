@@ -83,3 +83,23 @@ probar la generación y las dos descargas. Comprobar el `.algym` con el inspecto
 del instalador 0.3.0 y una restauración desechable. No sobrescribir la VM ya migrada.
 La actualización del frontend en la computadora real del cliente es una entrega
 separada: el build en esta rama no actualiza automáticamente esa computadora.
+
+## Activación comprobada: 19 de octubre de 2026
+
+Tras autorización explícita se creó `algym_export_reader` con un secreto exclusivo.
+La comprobación en la cuenta real confirmó transacciones de lectura, cero tablas
+modificables en public/auth/storage y ausencia de privilegios de administrador,
+creación de bases o administración de roles. No se ejecutaron migraciones en el
+origen ni escrituras en registros del negocio.
+
+Se activó el contenedor separado en la IP de la VPS, puerto HTTPS 54433. La interfaz
+publicada se fija en `/opt/algym-export/deploy.env`, fuera del repositorio. Para
+operarlo conservar `--env-file /opt/algym-export/deploy.env` al usar Compose.
+Reinicia automáticamente con Docker; límite de 1 GiB y 1 CPU; healthcheck saludable.
+El certificado actual vence el 19 de octubre de 2027. Renovarlo y distribuir la
+nueva CA pública al frontend antes de esa fecha.
+
+Prueba completa con sesión propietaria: creación desde el botón, preparación,
+descargas `.algym` y `.dump`, huellas iguales al servidor, restauración desechable
+con el importador 0.3.0 y segunda importación sin duplicados. Supabase continuó
+saludable. Los contenedores operativos no se reiniciaron para activar el exportador.
