@@ -73,7 +73,12 @@ export class MigrationStore {
         if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
         // A queued job belongs to the worker; never remove it while it may be running.
         const queued = await lstat(path.join(dir, "request.json")).then(() => true, () => false);
-        if (!queued && Date.now() - entry.mtimeMs > 3600000) { await rm(dir, { recursive: true }); continue; }
+        if ((!queued && Date.now() - entry.mtimeMs > 3600000) || Date.now() - entry.mtimeMs > 86400000) { await rm(dir, { recursive: true }); continue; }
+        const finished = await readJson(path.join(this.root, "outbox", `${name}.json`)).then(value => {
+          const parsed = statusSchema.safeParse(value);
+          return parsed.success && ["succeeded", "failed"].includes(parsed.data.state);
+        }, () => false);
+        if (finished) await rm(path.join(dir, "data.algym"), { force: true });
         if (await lstat(path.join(dir, "data.algym")).then(() => true, () => false)) files++;
       }
       if (files >= 3) throw new AppError(429, "UPLOAD_LIMIT", "Hay archivos pendientes. Espera una hora antes de volver a cargar otro respaldo.");
@@ -120,6 +125,7 @@ export class MigrationStore {
     try {
       const status = statusSchema.parse(await readJson(path.join(this.root, "outbox", `${id}.json`)));
       if (status.tokenHash !== metadata.tokenHash) throw new Error("Invalid status");
+      if (["succeeded", "failed"].includes(status.state)) await rm(path.join(this.folder(id), "data.algym"), { force: true });
       return { state: status.state, message: status.message, updatedAt: status.updatedAt };
     } catch {
       return { state: "queued", message: "Esperando al servicio de importación…" };

@@ -89,7 +89,8 @@ export async function processJob({ appRoot, dataRoot, id, authorizeJob = authori
     if (request && hash.test(request.tokenHash)) await status('failed', safeMessage(error));
   } finally {
     if (work) await rm(work, { recursive: true, force: true });
-    if (await json(output).then(r => terminal(r.state), () => false)) await rm(path.join(folder, 'data.algym'), { force: true });
+    // Never delete from the unprivileged inbox as SYSTEM: its directories may
+    // be replaced with junctions. The backend removes uploads as LocalService.
   }
 }
 
@@ -105,12 +106,11 @@ async function main() {
       for (const id of await readdir(path.join(root, 'inbox'))) {
         if (!uuid.test(id)) continue;
         await processJob({ appRoot, dataRoot, id });
-        const folder = path.join(root, 'inbox', id);
-        const info = await lstat(folder).catch(() => null);
-        if (info?.isDirectory() && !info.isSymbolicLink() && Date.now() - info.mtimeMs > 86400000) {
-          await rm(folder, { recursive: true, force: true });
-          await rm(path.join(root, 'outbox', `${id}.json`), { force: true });
-        }
+      }
+      for (const name of await readdir(path.join(root, 'outbox'))) {
+        if (!name.endsWith('.json') || !uuid.test(name.slice(0, -5))) continue;
+        const file = path.join(root, 'outbox', name);
+        if (Date.now() - (await lstat(file)).mtimeMs > 86400000) await rm(file);
       }
       await new Promise(resolve => setTimeout(resolve, 2000));
     }

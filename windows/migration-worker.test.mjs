@@ -38,7 +38,7 @@ test('worker confines jobs, rechecks owner, rejects changed files and recovers c
     const changed = await job('b'.repeat(64)); await run(changed); assert.equal((await status(changed)).state, 'failed'); assert.equal(executions, 0);
     const good = await job(); await run(good); assert.equal((await status(good)).state, 'succeeded'); assert.equal(executions, 1);
     await run(good); assert.equal(executions, 1);
-    await assert.rejects(access(path.join(root, 'migration', 'inbox', good, 'data.algym')));
+    await access(path.join(root, 'migration', 'inbox', good, 'data.algym')); // cleanup belongs to the low-privilege backend
     await writeFile(path.join(root, 'private', 'last-import.json'), JSON.stringify({ sha256 }));
     const recovered = await job();
     await writeFile(path.join(root, 'migration', 'outbox', recovered + '.json'), JSON.stringify({ state: 'running' }));
