@@ -1,0 +1,11 @@
+import https from 'node:https';
+import { readFile } from 'node:fs/promises';
+import { ExportJobs, createHandler, ownerAuthorizer } from './service.mjs';
+process.umask(0o077);
+const config = JSON.parse(await readFile(process.env.ALGYM_EXPORT_CONFIG ?? '/run/algym/export.json', 'utf8'));
+if (config.source?.user !== 'algym_export_reader') throw new Error('Configura una cuenta exclusiva de solo lectura para el exportador.');
+const jobs = new ExportJobs(config); await jobs.init();
+const server = https.createServer({ key: await readFile(config.tlsKey), cert: await readFile(config.tlsCert), minVersion: 'TLSv1.2' }, createHandler({ jobs, authorize: ownerAuthorizer(config) }));
+server.requestTimeout = 15000; server.headersTimeout = 10000; server.maxHeadersCount = 30;
+server.listen(config.port ?? 54433, config.bind ?? '0.0.0.0', () => console.log('Exportador AlGym disponible.'));
+setInterval(() => jobs.cleanup().catch(() => {}), 60000).unref();

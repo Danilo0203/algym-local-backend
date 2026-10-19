@@ -1,0 +1,5 @@
+{
+  "name": "algym-hostinger-export", "private": true, "type": "module", "version": "1.0.0",
+  "scripts": { "test": "node --test *.test.mjs", "start": "node server.mjs" },
+  "dependencies": { "bcryptjs": "3.0.2", "pg": "8.22.0" }
+}

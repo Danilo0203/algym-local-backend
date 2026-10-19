@@ -1,0 +1,32 @@
+services:
+  exporter:
+    build:
+      context: ..
+      dockerfile: hostinger/Dockerfile
+    image: algym-hostinger-export:1.0.0
+    container_name: algym-hostinger-export
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    ports: ["${ALGYM_EXPORT_BIND:-127.0.0.1}:54433:54433"]
+    volumes:
+      - /opt/algym-export/config:/run/algym:ro
+      - /opt/algym-export/jobs:/data/jobs
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/run/postgresql:size=1m,mode=1777
+    networks: [supabase]
+    healthcheck:
+      test: ["CMD", "node", "-e", "const h=require('https'),f=require('fs');const c=JSON.parse(f.readFileSync('/run/algym/export.json'));h.get('https://127.0.0.1:54433/health',{ca:f.readFileSync(c.tlsCert)},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  supabase:
+    external: true
+    name: supabase_network_all-gym-vf
