@@ -29,6 +29,7 @@ import { profileRouter } from "./modules/profile/profile.routes.js";
 import { routineBlueprintsRouter } from "./modules/routine-blueprints/routine-blueprints.routes.js";
 import { rolesRouter } from "./modules/roles/roles.routes.js";
 import { usersRouter } from "./modules/users/users.routes.js";
+import { migrationRouter } from "./modules/migration/migration.routes.js";
 
 export const app = express();
 
@@ -93,6 +94,7 @@ app.use("/profile", profileRouter);
 app.use("/routine-blueprints", routineBlueprintsRouter);
 app.use("/roles", rolesRouter);
 app.use("/users", usersRouter);
+app.use("/system/migration", migrationRouter);
 
 app.use((_request: Request, response: Response) => {
   response.status(404).json({

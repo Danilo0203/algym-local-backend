@@ -12,6 +12,7 @@ export const logger = pino({
     paths: [
       "req.headers.cookie",
       "req.headers.authorization",
+      "req.headers['x-algym-import-token']",
       "res.headers.set-cookie",
       "res.headers['set-cookie']",
     ],
