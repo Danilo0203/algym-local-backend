@@ -35,9 +35,9 @@ exercisesRouter.post("/with-image", async (request, response, next) => {
 exercisesRouter.post("/image-attachment", async (request, response, next) => {
   try {
     const session = await validateSessionToken(readSessionTokenFromRequest(request));
-    const { exercise_id, image_base64, original_file_name } = attachExerciseImageSchema.parse(request.body);
+    const { exercise_id, image_base64, original_file_name, ...changes } = attachExerciseImageSchema.parse(request.body);
     response.status(200).json(await attachExerciseImage(
-      session.userId, exercise_id, original_file_name, decodeExerciseImage(image_base64),
+      session.userId, exercise_id, { ...changes, originalFileName: original_file_name }, decodeExerciseImage(image_base64),
     ));
   } catch (error) { next(error); }
 });

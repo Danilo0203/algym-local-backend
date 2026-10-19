@@ -436,9 +436,19 @@ test("usuarios internos: permisos, alta, cambio de contraseña y rol, baja lógi
   assert.equal(row.rows[0]?.biometric_id, null);
   assert.ok(await bcrypt.compare(password, row.rows[0]!.encrypted_password));
 
+  assert.equal((await request(app).post(`/users/${userId}/biometric`).set("Cookie", client.cookie)).status, 403);
+  const biometric = await request(app).post(`/users/${userId}/biometric`).set("Cookie", owner.cookie);
+  assert.equal(biometric.status, 200);
+  assert.ok(Number.isSafeInteger(biometric.body.biometric_id));
+  assert.ok(biometric.body.biometric_id > 0);
+  const repeated = await request(app).post(`/users/${userId}/biometric`).set("Cookie", owner.cookie);
+  assert.equal(repeated.status, 200);
+  assert.equal(repeated.body.biometric_id, biometric.body.biometric_id);
+
   const listed = await request(app).get("/users").set("Cookie", owner.cookie);
   assert.equal(listed.status, 200);
-  assert.ok(listed.body.data.some((user: { id: string }) => user.id === userId));
+  assert.ok(listed.body.data.some((user: { id: string; biometric_id: number }) =>
+    user.id === userId && user.biometric_id === biometric.body.biometric_id));
   assert.equal(JSON.stringify(listed.body).includes("encrypted_password"), false);
   assert.equal(JSON.stringify(listed.body).includes(password), false);
   const invisible = await withUserTransaction(client.id, async (connection) =>

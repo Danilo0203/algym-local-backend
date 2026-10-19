@@ -13,9 +13,7 @@ type PendingRow = {
 
 const eligible = `s.status = 'pending' AND s.initial_collection_origin = 'customers'
   AND p.role = 'client' AND p.is_active
-  AND NOT EXISTS (SELECT 1 FROM public.payments pay WHERE pay.subscription_id = s.id)
-  AND NOT EXISTS (SELECT 1 FROM public.subscriptions previous
-    WHERE previous.user_id = s.user_id AND previous.id <> s.id)`;
+  AND NOT EXISTS (SELECT 1 FROM public.payments pay WHERE pay.subscription_id = s.id)`;
 
 const pendingColumns = `s.id, s.user_id AS customer_id, p.full_name, p.phone,
   s.plan_id::text, pl.name AS plan_name, s.start_date::text, s.end_date::text,

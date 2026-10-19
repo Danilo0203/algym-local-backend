@@ -14,6 +14,7 @@ type UserRow = {
   created_at: Date;
   last_sign_in_at: Date | null;
   is_active: boolean;
+  biometric_id: number | null;
 };
 
 type LockedUser = UserRow;
@@ -32,7 +33,8 @@ const userColumns = `
   profiles.role::text AS base_role,
   COALESCE(profiles.created_at, users.created_at) AS created_at,
   users.last_sign_in_at,
-  profiles.is_active
+  profiles.is_active,
+  profiles.biometric_id
 `;
 
 async function requirePermission(client: PoolClient, permission: string): Promise<string> {
@@ -214,6 +216,28 @@ export async function updateInternalUser(
       );
     }
     return { id: userId };
+  });
+}
+
+export async function registerInternalUserBiometric(actorUserId: string, userId: string) {
+  return withUserTransaction(actorUserId, async (client) => {
+    const actorRole = await requirePermission(client, "users.update");
+    const existing = await getLockedUser(client, userId);
+    assertRoleAssignment(actorRole, existing.role, existing.base_role === "custom");
+    if (!existing.is_active) {
+      throw new AppError(409, "INACTIVE_USER", "Activa al usuario antes de registrar su huella");
+    }
+    if (existing.biometric_id !== null) {
+      return { id: userId, biometric_id: existing.biometric_id };
+    }
+    const result = await client.query<{ biometric_id: number }>(
+      `UPDATE public.profiles
+       SET biometric_id = nextval('public.profiles_biometric_id_seq'), updated_at = now()
+       WHERE id = $1
+       RETURNING biometric_id`,
+      [userId],
+    );
+    return { id: userId, biometric_id: result.rows[0]!.biometric_id };
   });
 }
 

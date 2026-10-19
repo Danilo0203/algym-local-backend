@@ -24,6 +24,7 @@ export type CustomerListQuery = {
   sort: string;
   is_active?: boolean;
   plan_id?: number;
+  biometric_id?: number;
   membership_status?: CustomerMembershipStatus;
 };
 

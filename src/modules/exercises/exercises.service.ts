@@ -61,6 +61,16 @@ async function requirePermission(client: PoolClient, permission: string) {
   }
 }
 
+function exerciseSlugBase(name: string) {
+  return name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "exercise";
+}
+
+function exerciseSlug(name: string, previousSlug?: string | null) {
+  const suffix = previousSlug?.match(/-([a-f0-9]{8})$/)?.[1] ?? randomBytes(4).toString("hex");
+  return `${exerciseSlugBase(name)}-${suffix}`;
+}
+
 export async function listExercises(actorUserId: string) {
   return withUserTransaction(actorUserId, async (client) => {
     const auth = await client.query<{ permissions: string[] | null; is_owner: boolean }>(
@@ -81,9 +91,7 @@ export async function listExercises(actorUserId: string) {
 
 async function insertExerciseRow(client: PoolClient, input: CreateExerciseInput) {
   const filename = input.image_url?.split("/").at(-1);
-  const baseSlug = input.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "exercise";
-  const slug = `${baseSlug}-${randomBytes(4).toString("hex")}`;
+  const slug = exerciseSlug(input.name);
   const result = await client.query<ExerciseRow>(
     `INSERT INTO public.exercises
       (slug, name, display_name, provider, exercise_type, image_url, animation_url,
@@ -134,10 +142,22 @@ export async function createExerciseWithImage(
 }
 
 async function updateExerciseRow(client: PoolClient, id: number, input: UpdateExerciseInput) {
+  let nextSlug: string | null = null;
+  if (input.displayName !== undefined) {
+    const current = await client.query<{ slug: string | null; provider: string | null }>(
+      "SELECT slug, provider FROM public.exercises WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    if (!current.rows[0]) throw new AppError(404, "EXERCISE_NOT_FOUND", "Ejercicio no encontrado");
+    if (current.rows[0].provider === "custom_local") {
+      nextSlug = exerciseSlug(input.displayName, current.rows[0].slug);
+    }
+  }
   const result = await client.query<ExerciseRow>(
     `UPDATE public.exercises
        SET name = COALESCE($2, name),
            display_name = COALESCE($2, display_name),
+           slug = COALESCE($14, slug),
            is_favorite = COALESCE($3, is_favorite),
            is_preview_hidden = COALESCE($4, is_preview_hidden),
            image_url = COALESCE($5, image_url),
@@ -158,7 +178,8 @@ async function updateExerciseRow(client: PoolClient, id: number, input: UpdateEx
       [id, input.displayName ?? null, input.isFavorite ?? null, input.isPreviewHidden ?? null,
       input.imageUrl ?? null, input.originalFileName ?? null, input.body_parts ?? null,
       input.target_muscles ?? null, input.secondary_muscles ?? null, input.equipments ?? null,
-      input.exercise_type ?? null, input.instructions ?? null, input.keywords ?? null],
+      input.exercise_type ?? null, input.instructions ?? null, input.keywords ?? null,
+      nextSlug],
   );
   const exercise = result.rows[0];
   if (!exercise) throw new AppError(404, "EXERCISE_NOT_FOUND", "Ejercicio no encontrado");
@@ -184,7 +205,7 @@ export async function updateExercise(actorUserId: string, id: number, input: Upd
 }
 
 export async function attachExerciseImage(
-  actorUserId: string, id: number, originalFileName: string | undefined, bytes: Buffer,
+  actorUserId: string, id: number, changes: UpdateExerciseInput, bytes: Buffer,
 ) {
   return withUserTransaction(actorUserId, async (client) => {
     await requirePermission(client, "exercises.update");
@@ -193,7 +214,7 @@ export async function attachExerciseImage(
     try {
       saved = await saveMedia("exercises", bytes);
       return await updateExerciseRow(client, id, {
-        imageUrl: saved.url, originalFileName,
+        ...changes, imageUrl: saved.url,
       });
     } catch (error) {
       if (saved?.created) await discardNewMedia("exercises", saved.url.split("/").at(-1)!);

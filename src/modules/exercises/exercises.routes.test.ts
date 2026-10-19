@@ -150,6 +150,7 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
   });
   assert.equal(updated.status, 200);
   assert.equal(updated.body.name, updatedName);
+  assert.equal(updated.body.slug, `${updatedName.toLowerCase().replaceAll(" ", "-")}${created.body.slug.slice(-9)}`);
   assert.equal(updated.body.is_favorite, true);
   const snapshot = execFileSync(
     "psql",
@@ -174,7 +175,10 @@ test("alta y adjunto de imagen coordinan archivo y fila, incluso si falla Postgr
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
     "base64",
   );
-  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+  const singleFrame = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+  const gif = Buffer.concat([
+    singleFrame.subarray(0, -1), singleFrame.subarray(19, -1), Buffer.from([0x3b]),
+  ]);
   const gifAlt = Buffer.from(gif);
   gifAlt[13] = 1; // Otro color de la paleta; sigue siendo un GIF de 1 × 1 válido.
   const pngFilename = `${createHash("sha256").update(png).digest("hex")}.png`;
@@ -198,6 +202,8 @@ test("alta y adjunto de imagen coordinan archivo y fila, incluso si falla Postgr
   assert.equal(existsSync(gifPath), true);
   assert.deepEqual((await request(app).get(`/media/exercises/${gifFilename}`)
     .set("Cookie", owner.cookie)).body, gif);
+  assert.equal((await request(app).get(`/media/exercises/${gifFilename}`)
+    .set("Cookie", owner.cookie)).headers["content-type"], "image/gif");
 
   const rejectedName = "ZZTEST LOCAL EXERCISE RECHAZADO";
   adminSql(`ALTER TABLE public.exercises ADD CONSTRAINT zz_exercise_image_failure
@@ -213,6 +219,19 @@ test("alta y adjunto de imagen coordinan archivo y fila, incluso si falla Postgr
       .send({ name: rejectedName, image_base64: png.toString("base64") });
     assert.equal(failedReusedFile.status, 500);
     assert.equal(existsSync(pngPath), true);
+    const failedReplacement = await request(app).post("/exercises/image-attachment")
+      .set("Cookie", owner.cookie)
+      .send({
+        exercise_id: created.body.id,
+        displayName: rejectedName,
+        image_base64: gifAlt.toString("base64"),
+      });
+    assert.equal(failedReplacement.status, 500);
+    assert.equal(existsSync(gifAltPath), false);
+    const unchanged = await request(app).get("/exercises").set("Cookie", owner.cookie);
+    const original = unchanged.body.data.find((item: { id: number }) => item.id === created.body.id);
+    assert.equal(original.name, name);
+    assert.equal(original.image_url, `/api/media/exercises/${gifFilename}`);
   } finally {
     adminSql("ALTER TABLE public.exercises DROP CONSTRAINT zz_exercise_image_failure");
   }
@@ -224,9 +243,20 @@ test("alta y adjunto de imagen coordinan archivo y fila, incluso si falla Postgr
   assert.equal(existsSync(gifAltPath), false);
   const attached = await request(app).post("/exercises/image-attachment")
     .set("Cookie", owner.cookie)
-    .send({ exercise_id: created.body.id, image_base64: gifAlt.toString("base64") });
+    .send({
+      exercise_id: created.body.id,
+      image_base64: gifAlt.toString("base64"),
+      original_file_name: "reemplazo.gif",
+      displayName: `${name} EDITADO`,
+      body_parts: ["chest"],
+      instructions: ["Mueve el peso con control."],
+    });
   assert.equal(attached.status, 200, JSON.stringify(attached.body));
   assert.equal(attached.body.image_url, `/api/media/exercises/${gifAltFilename}`);
+  assert.equal(attached.body.name, `${name} EDITADO`);
+  assert.equal(attached.body.slug, `${name.toLowerCase().replaceAll(" ", "-")}-editado${created.body.slug.slice(-9)}`);
+  assert.deepEqual(attached.body.body_parts, ["chest"]);
+  assert.deepEqual(attached.body.instructions, ["Mueve el peso con control."]);
   assert.equal(existsSync(gifAltPath), true);
   assert.deepEqual((await request(app).get(`/media/exercises/${gifAltFilename}`)
     .set("Cookie", owner.cookie)).body, gifAlt);

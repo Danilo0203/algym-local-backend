@@ -184,6 +184,19 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(pendingList.status, 200, JSON.stringify(pendingList.body));
   assert.deepEqual(pendingList.body.data.map((row: { id: string }) => row.id), [pendingId]);
   assert.equal(pendingList.body.data[0].amount_original, 125);
+  adminSql(`INSERT INTO public.subscriptions
+    (user_id, plan_id, start_date, end_date, status, created_at)
+    VALUES ('${pendingCustomer.body.id}', ${planId}, CURRENT_DATE - 60,
+      CURRENT_DATE - 30, 'expired', now() - interval '60 days');
+    INSERT INTO public.payments
+    (subscription_id, user_id, amount_original, discount_amount, amount_paid,
+      method, created_by_user_id, status)
+    SELECT id, user_id, 125, 0, 125, 'cash', '${employee.id}', 'posted'
+    FROM public.subscriptions WHERE user_id = '${pendingCustomer.body.id}' AND status = 'expired';`);
+  const pendingWithHistory = await request(app).get("/payments/membership/pending")
+    .set("Cookie", employee.cookie);
+  assert.equal(pendingWithHistory.status, 200, JSON.stringify(pendingWithHistory.body));
+  assert.ok(pendingWithHistory.body.data.some((row: { id: string }) => row.id === pendingId));
   const planOnly = await request(app).patch(`/customers/${pendingCustomer.body.id}/membership/pending`)
     .set("Cookie", owner.cookie).send({ plan_id: planId, cycles: 1 });
   assert.equal(planOnly.status, 200, JSON.stringify(planOnly.body));

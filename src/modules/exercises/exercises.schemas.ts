@@ -40,6 +40,8 @@ export const createExerciseWithImageSchema = z.object({
 export const attachExerciseImageSchema = z.object({
   exercise_id: exerciseIdSchema,
   ...exerciseImagePayload,
+  displayName: exerciseNameSchema.optional(),
+  ...exerciseMetadataFields,
 }).strict();
 
 export function decodeExerciseImage(base64: string): Buffer {

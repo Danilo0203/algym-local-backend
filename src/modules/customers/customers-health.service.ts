@@ -443,6 +443,66 @@ const trainingHealthColumns = [
   "injuries_or_pain", "parq_requires_attention", "medical_clearance_notes",
 ] as const;
 
+const trainingEnumValues: Record<string, ReadonlySet<string>> = {
+  primary_goal: new Set(["fat_loss", "muscle_gain", "recomp", "strength", "general_fitness", "cardio"]),
+  secondary_goal: new Set(["fat_loss", "muscle_gain", "recomp", "strength", "general_fitness", "cardio"]),
+  experience_level: new Set(["beginner", "intermediate", "advanced"]),
+  training_location: new Set(["gym", "home", "mixed"]),
+  activity_level: new Set(["sedentario", "1_3_dias", "3_5_dias", "6_7_dias", "2_veces_dia"]),
+  cardio_preference: new Set(["none", "light", "moderate", "high"]),
+  focus_areas: new Set(["upper_body", "lower_body", "glutes", "core", "chest", "back", "shoulders", "arms", "conditioning"]),
+  equipment_available: new Set(["full_gym", "body_weight", "dumbbell", "barbell", "machine", "bands", "kettlebell", "treadmill", "bike", "rower"]),
+};
+
+const trainingRestrictedMovements = new Set([
+  "deep_knee_flexion", "overhead_pressing", "loaded_spinal_flexion",
+  "high_impact", "horizontal_pressing", "vertical_pulling", "hip_hinge",
+  "unilateral_lower_body",
+]);
+
+async function syncTrainingProfileFromHealthUpdate(
+  client: PoolClient,
+  customerId: string,
+  input: CustomerHealthProfileUpdateInput,
+): Promise<void> {
+  const columns: string[] = [];
+  const values: unknown[] = [];
+
+  for (const column of trainingHealthColumns) {
+    const value = input[column];
+    if (value === undefined) continue;
+    const allowed = trainingEnumValues[column];
+    if (Array.isArray(value)) {
+      columns.push(column);
+      values.push(allowed ? value.filter((item) => allowed.has(item)) : value);
+    } else if (value === null && (column === "focus_areas" || column === "equipment_available")) {
+      columns.push(column);
+      values.push([]);
+    } else if (value === null || !allowed || allowed.has(String(value))) {
+      columns.push(column);
+      values.push(value);
+    }
+  }
+
+  if (input.restricted_movements !== undefined) {
+    columns.push("restricted_movements");
+    values.push(input.restricted_movements?.split(",")
+      .map((value) => value.trim())
+      .filter((value) => trainingRestrictedMovements.has(value)) ?? []);
+  }
+
+  if (columns.length === 0) return;
+
+  await client.query(
+    `INSERT INTO public.training_profiles (user_id, ${columns.join(", ")})
+     VALUES ($1, ${columns.map((_, index) => `$${index + 2}`).join(", ")})
+     ON CONFLICT (user_id) DO UPDATE
+     SET ${columns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}`,
+    [customerId, ...values],
+  );
+  await syncTrainingProfileCompleteness(client, customerId);
+}
+
 async function syncTrainingProfileCompleteness(client: PoolClient, customerId: string): Promise<void> {
   const result = await client.query<{ is_complete: boolean }>(
     `SELECT COALESCE(
@@ -749,6 +809,8 @@ export async function updateCustomerHealthProfile(
         [customerId, ...values],
       );
 
+      await syncTrainingProfileFromHealthUpdate(client, customerId, input);
+
       const profile = await getHealthProfileRow(client, customerId);
       if (!profile) throw persistenceError;
       return mapHealthProfile(customerId, profile);
@@ -867,6 +929,8 @@ export async function createCustomerBodyAssessment(
       const assessmentId = insertResult.rows[0]?.id;
       if (!assessmentId) throw persistenceError;
 
+      await syncTrainingProfileCompleteness(client, customerId);
+
       const assessment = await getBodyAssessmentRow(
         client,
         customerId,
@@ -913,6 +977,8 @@ export async function updateCustomerBodyAssessment(
       if (updateResult.rowCount === 0) {
         throw assessmentNotFoundError;
       }
+
+      await syncTrainingProfileCompleteness(client, customerId);
 
       const assessment = await getBodyAssessmentRow(
         client,

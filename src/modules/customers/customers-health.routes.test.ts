@@ -317,6 +317,47 @@ test("PATCH health-profile crea por UPSERT, normaliza y actualiza parcialmente",
   assert.equal(detail.body.health_profile_status, "completed");
 });
 
+test("la ficha de entrenamiento habilita la propuesta al completar también las medidas", { concurrency: false }, async () => {
+  const owner = await createSyntheticUser("owner");
+  const cookie = await loginAndGetCookie(owner.email);
+  const customerId = await createCustomer(owner.userId);
+
+  const profile = await request(app)
+    .patch(`/customers/${customerId}/health-profile`)
+    .set("Cookie", cookie)
+    .send({
+      primary_goal: "strength",
+      parq_requires_attention: false,
+      experience_level: "intermediate",
+      days_per_week: 5,
+      session_minutes: 150,
+      activity_level: "3_5_dias",
+      cardio_preference: "light",
+      training_location: "gym",
+    });
+  assert.equal(profile.status, 200);
+
+  const beforeAssessment = await request(app)
+    .get(`/customers/${customerId}/routine`)
+    .set("Cookie", cookie);
+  assert.equal(beforeAssessment.status, 200);
+  assert.deepEqual(beforeAssessment.body.missingRequirements, ["Peso", "Estatura"]);
+
+  const assessment = await request(app)
+    .post(`/customers/${customerId}/body-assessments`)
+    .set("Cookie", cookie)
+    .send({ weight_kg: 70, height_cm: 168 });
+  assert.equal(assessment.status, 201);
+
+  const workspace = await request(app)
+    .get(`/customers/${customerId}/routine`)
+    .set("Cookie", cookie);
+  assert.equal(workspace.status, 200);
+  assert.deepEqual(workspace.body.missingRequirements, []);
+  assert.equal(workspace.body.trainingProfile.primary_goal, "strength");
+  assert.equal(workspace.body.trainingProfile.is_complete, true);
+});
+
 test("PATCH health-profile rechaza body vacío, propiedades desconocidas y límites", { concurrency: false }, async () => {
   const owner = await createSyntheticUser("owner");
   const cookie = await loginAndGetCookie(owner.email);

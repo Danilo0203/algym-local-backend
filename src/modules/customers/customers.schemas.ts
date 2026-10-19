@@ -140,6 +140,7 @@ export const customersListQuerySchema = z.object({
   sort: z.string().trim().default("full_name"),
   is_active: strictBooleanQuerySchema.optional(),
   plan_id: z.coerce.number().int().positive().optional(),
+  biometric_id: z.coerce.number().int().nonnegative().optional(),
   membership_status: customerMembershipStatusSchema.optional(),
 }).strict() satisfies z.ZodType<CustomerListQuery>;
 

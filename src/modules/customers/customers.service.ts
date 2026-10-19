@@ -186,6 +186,8 @@ const effectiveMembershipStatusSql = `CASE WHEN overview.subscription_status = '
 const customerSortMap = {
   full_name: "overview.full_name",
   "-full_name": "overview.full_name DESC",
+  biometric_id: "profiles.biometric_id",
+  "-biometric_id": "profiles.biometric_id DESC",
   created_at: "profiles.created_at",
   "-created_at": "profiles.created_at DESC",
   updated_at: "profiles.updated_at",
@@ -544,12 +546,15 @@ export async function listCustomers(
       `
         SELECT count(*)::text AS total
         FROM public.customer_overview AS overview
+        INNER JOIN public.profiles AS profiles
+          ON profiles.id = overview.id
         INNER JOIN auth.users AS users
           ON users.id = overview.id
         WHERE users.deleted_at IS NULL
           AND ($3::boolean IS NULL OR overview.is_active = $3)
           AND ($4::bigint IS NULL OR overview.plan_id = $4)
           AND ($5::text IS NULL OR ${effectiveMembershipStatusSql} = $5)
+          AND ($6::bigint IS NULL OR profiles.biometric_id = $6)
           AND (
             $1 = ''
             OR overview.full_name_search LIKE '%' || lower(public.unaccent($1)) || '%'
@@ -563,6 +568,7 @@ export async function listCustomers(
         parsedQuery.is_active ?? null,
         parsedQuery.plan_id ?? null,
         parsedQuery.membership_status ?? null,
+        parsedQuery.biometric_id ?? null,
       ],
     );
 
@@ -627,6 +633,7 @@ export async function listCustomers(
           AND ($3::boolean IS NULL OR overview.is_active = $3)
           AND ($4::bigint IS NULL OR overview.plan_id = $4)
           AND ($5::text IS NULL OR ${effectiveMembershipStatusSql} = $5)
+          AND ($8::bigint IS NULL OR profiles.biometric_id = $8)
           AND (
             $1 = ''
             OR overview.full_name_search LIKE '%' || lower(public.unaccent($1)) || '%'
@@ -645,6 +652,7 @@ export async function listCustomers(
         parsedQuery.membership_status ?? null,
         limit,
         offset,
+        parsedQuery.biometric_id ?? null,
       ],
     );
 

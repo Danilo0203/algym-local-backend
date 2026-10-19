@@ -7,6 +7,7 @@ import {
   deleteInternalUser,
   listInternalRoles,
   listInternalUsers,
+  registerInternalUserBiometric,
   updateInternalUser,
 } from "./users.service.js";
 
@@ -40,6 +41,14 @@ usersRouter.patch("/:id", async (request, response, next) => {
     const userId = userIdParamSchema.parse(request.params.id);
     const input = updateUserSchema.parse(request.body);
     response.status(200).json(await updateInternalUser(session.userId, userId, input));
+  } catch (error) { next(error); }
+});
+
+usersRouter.post("/:id/biometric", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const userId = userIdParamSchema.parse(request.params.id);
+    response.status(200).json(await registerInternalUserBiometric(session.userId, userId));
   } catch (error) { next(error); }
 });
 
