@@ -4,7 +4,8 @@ El cliente usa un frontend local con Supabase en Hostinger. El botón pertenece 
 esa versión del frontend, en Administración → Exportar para Windows. Este
 servicio convierte la copia en la VPS y el frontend transmite la descarga; no
 necesita PostgreSQL ni una contraseña de base de datos en el equipo del cliente.
-No se incluye en el instalador Windows ni sustituye su backend.
+Desde AlGym Windows 0.3.2 también se puede usar mediante una conexión temporal
+a la cuenta propietaria de Hostinger. No sustituye el backend local.
 
 ## Acceso y datos
 
@@ -103,3 +104,38 @@ Prueba completa con sesión propietaria: creación desde el botón, preparación
 descargas `.algym` y `.dump`, huellas iguales al servidor, restauración desechable
 con el importador 0.3.0 y segunda importación sin duplicados. Supabase continuó
 saludable. Los contenedores operativos no se reiniciaron para activar el exportador.
+
+
+## Conexión desde AlGym Windows 0.3.2
+
+La ampliación agrega `POST /session` al listener HTTPS existente. Recibe un
+correo y contraseña, con JSON limitado a 4 KiB y cinco intentos por minuto por
+IP y por cuenta. GoTrue valida las credenciales por la red privada de Docker;
+el exportador vuelve a comprobar la cuenta propietaria activa y su sesión
+contra la base con la cuenta técnica de lectura. La respuesta contiene solo
+un access token y su caducidad, nunca refresh tokens, contraseñas ni perfiles.
+`GET /health` anuncia `nativeLogin: true` cuando está habilitado. Las rutas
+`/jobs` anteriores conservan su autorización, límites e integridad.
+
+No requiere cambios de esquema, permisos, credenciales, puertos ni contenedores
+de Supabase. Se debe actualizar únicamente la imagen del exportador, conservando
+config y jobs. La publicación requiere autorización del operador; el código
+preparado localmente no implica que la ampliación ya esté activada en la VPS.
+
+Pruebas: `node --test hostinger/service.test.mjs hostinger/login.test.mjs`.
+
+### Activación de la conexión nativa: 19 de octubre de 2026
+
+Con autorización explícita se actualizó únicamente el exportador a
+`algym-hostinger-export:1.1.0`, derivado de la imagen 1.0.0 existente sin renovar
+sus dependencias. Se reemplazaron server.mjs, service.mjs y se agregó login.mjs;
+las cinco pruebas pasaron dentro de esa imagen sin acceso a la red operativa.
+El HTTPS confirma `nativeLogin: true`; `/jobs` sin sesión devuelve 401.
+La configuración y las tres copias existentes conservaron sus hashes y los once
+contenedores de Supabase conservaron sus IDs y fechas de arranque.
+
+La primera comprobación utilizó una dirección loopback que no estaba publicada
+en el host y activó la reversión automática. La activación definitiva comprobó
+la IP HTTPS publicada. La imagen previa queda como
+`algym-hostinger-export:rollback-032`, y la configuración Compose anterior en
+`/opt/algym-export/releases/native-login-032/compose.before.yml`.

@@ -1,0 +1,138 @@
+﻿ALGYM — CONTINUAR EL DESARROLLO DESDE WINDOWS
+Entrega de código del instalador 0.3.5 y auxiliares — 22 de octubre de 2026
+
+OBJETIVO
+
+Puedes descargar el código en la computadora del cliente, modificarlo, probarlo
+y construir allí la actualización. No necesitas regresar a la Mac ni llevar
+otro instalador en una USB. El sistema instalado utiliza archivos compilados:
+editar el repositorio o hacer git pull no actualiza los servicios automáticamente.
+El procedimiento disponible compila un nuevo instalador en esa misma PC y luego
+lo ejecuta como actualización, conservando la base y la configuración existentes.
+
+REPOSITORIOS Y RAMAS
+
+Frontend, sincronización, instalador y auxiliar SSH:
+https://github.com/Danilo0203/al-gym-sys/tree/codex/windows-native-installer
+
+Backend, importación y actualización incremental de datos:
+https://github.com/Danilo0203/algym-local-backend/tree/codex/windows-native-installer
+
+Ambos repositorios tienen también codex/hostinger-windows-export. Esa rama
+corresponde al frontend que usa Supabase y al servicio exportador de la VPS.
+Para trabajar sobre AlGym instalado en Windows usa windows-native-installer
+EN LOS DOS REPOSITORIOS. No mezcles una rama del exportador con el instalador.
+Descargar el código no despliega cambios en Hostinger ni autoriza ese despliegue.
+
+REQUISITOS
+
+- Windows 10 22H2 x64, build 19045 o posterior, o Windows 11.
+- Git para Windows, con acceso a los dos repositorios de GitHub.
+- Windows PowerShell 5.1 de 64 bits.
+- Inno Setup 6.4 o posterior. Ubicación predeterminada del compilador:
+  C:\Program Files (x86)\Inno Setup 6\ISCC.exe
+- Internet y espacio libre para dependencias, código y varias compilaciones.
+
+Build-WindowsInstaller.ps1 descarga Node x64, PostgreSQL y las herramientas
+fijadas, verifica sus hashes y compila en una carpeta separada. No necesitas
+instalar Node o PostgreSQL globalmente para ejecutar ese proceso de compilación.
+No se necesita la contraseña de Hostinger ni una copia .algym para compilar.
+
+PRIMERA DESCARGA — POWERSHELL
+
+Crea una carpeta de desarrollo independiente de Program Files y ProgramData:
+
+  $codigoAlGym = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'AlGym-Desarrollo'
+  New-Item -ItemType Directory -Force -Path $codigoAlGym | Out-Null
+  Set-Location $codigoAlGym
+  git clone --branch codex/windows-native-installer https://github.com/Danilo0203/al-gym-sys.git
+  if ($LASTEXITCODE -ne 0) { throw 'No se pudo descargar el frontend.' }
+  git clone --branch codex/windows-native-installer https://github.com/Danilo0203/algym-local-backend.git
+  if ($LASTEXITCODE -ne 0) { throw 'No se pudo descargar el backend.' }
+
+Si GitHub pide acceso, inicia sesión en su diálogo o administrador de credenciales.
+No pongas contraseñas ni tokens en las URL, archivos, comandos o conversaciones.
+Si esas carpetas ya existen, revisa su rama y estado; no las borres ni reemplaces.
+
+ANTES DE HACER CAMBIOS
+
+Abre la carpeta AlGym-Desarrollo en Codex o en la tarea con acceso local.
+Pídele que lea este documento, all-gym-vf/AGENTS.md y deploy/windows/README.md.
+Comprueba git status en ambos repositorios. Con los árboles limpios y estando
+en codex/windows-native-installer, descarga cambios con git pull --ff-only en
+cada uno. Si hay cambios pendientes o divergencia, revísalos antes de continuar;
+no uses reset --hard ni force push para resolverlo.
+
+Para cada trabajo nuevo crea una rama con nombre propio en los dos repositorios,
+por ejemplo codex/ajuste-cliente-001, usando git switch -c desde la rama Windows.
+No cambies main ni publiques automáticamente en las ramas operativas.
+Guarda el trabajo con commits y publica la rama elegida en cada repositorio.
+Revisa siempre git diff --cached antes del commit y conserva juntos los dos
+identificadores de commit que se utilizaron para cada compilación.
+
+PROBAR Y CONSTRUIR
+
+Las pruebas deben usar bases y carpetas desechables. No conectar pruebas,
+migraciones de desarrollo ni servidores de desarrollo a la base operativa del
+cliente. No ejecutar pnpm test ni src/test/prepare-db.ts contra una instalación
+real. Ese preparador elimina y recrea la base de pruebas.
+No copiar C:\ProgramData\AlGym\private ni sus contraseñas al repositorio.
+Si hace falta probar la interfaz antes de aplicar, preparar una instalación de
+ensayo separada, con otra base, otros puertos y el envío al reloj pausado.
+
+Para reproducir la versión 0.3.5, ejecuta desde AlGym-Desarrollo\al-gym-sys:
+
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\windows\Build-WindowsInstaller.ps1 -BackendPath ..\algym-local-backend -Version 0.3.5
+
+El resultado queda en:
+  al-gym-sys\build\windows\AlGym-Setup-0.3.5-win-x64.exe
+
+Para cambios posteriores elige un número de versión nuevo y no utilizado,
+por ejemplo 0.3.6, y cambia -Version al compilar. Ese ejemplo no significa que
+exista una entrega 0.3.6 publicada. Si Inno está instalado en otra ubicación,
+agrega -InnoCompiler con la ruta completa a ISCC.exe.
+
+El proceso instala dependencias desde sus lockfiles, ejecuta pruebas de archivos
+multimedia e importación y usa PostgreSQL temporal para probar la actualización.
+Si falla una prueba o la compilación, no reemplaces los archivos del sistema
+instalado. Conserva el error y la carpeta build-IDENTIFICADOR para revisarlo.
+
+APLICAR EN ESA MISMA COMPUTADORA
+
+1. Coordina una pausa de trabajo y conserva un respaldo local verificado.
+2. Ejecuta el nuevo instalador construido en esa PC y acepta el permiso de Windows.
+3. Actualiza la instalación existente: no desinstales, no borres ProgramData,
+   no crees otra cuenta y no repitas la importación inicial.
+4. El instalador respalda antes de reemplazar archivos y conserva datos,
+   cuentas, archivos y configuración. Un fallo requiere revisar el mensaje
+   y el respaldo; no se promete una reversión automática de la base.
+5. Verifica las tres respuestas de salud y revisa Clientes, Pagos y Asistencias:
+   http://127.0.0.1:4000/health/ready
+   http://127.0.0.1:8080/health/ready
+   http://127.0.0.1:3000/api/health
+6. Conserva pausado el envío de comandos al reloj hasta su prueba autorizada.
+
+El código está preparado para Windows 10 x64. Las pruebas previas de Windows se
+hicieron en Windows 11 ARM con emulación x64; no sustituyen la validación del
+equipo físico del cliente. Publicar las ramas no equivale a actualizar ese equipo.
+
+RESPALDOS DE HOSTINGER
+
+El auxiliar independiente está en:
+  al-gym-sys\deploy\windows\hostinger-download\DESCARGAR-DATOS-HOSTINGER.cmd
+
+Mantén Herramientas-Hostinger a su lado y lee DESCARGAR-HOSTINGER-LEER.txt.
+Para combinar datos usa Administración > Importar datos > Actualizar este equipo.
+La primera actualización necesita el .algym exacto importado originalmente y
+una copia nueva. Los respaldos privados se llevan por separado; no están en Git.
+Si aparecen conflictos, detente para revisarlos. No borres registros ni marcas
+de importación para forzar la actualización.
+
+QUÉ NUNCA SUBIR A GITHUB
+
+Contraseñas, tokens, claves SSH/TLS privadas, .env reales, export.json,
+installation.json, dumps, .algym, datos de clientes, archivos privados del reloj,
+carpetas ProgramData, respaldos, dependencias o ejecutables compilados.
+Los ejemplos sin secretos y el certificado PUBLICO del exportador sí son código
+distribuible. Los archivos de ignorados son una protección adicional; no uses
+git add -f para saltarla. Revisa el contenido antes de cada publicación.

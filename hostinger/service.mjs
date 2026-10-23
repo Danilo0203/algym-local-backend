@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile, stat, rename } from 'node:fs/p
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import pg from 'pg';
+import { createHash } from 'node:crypto';
 import { buildExport, sourceConfig } from './pipeline.mjs';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -93,18 +94,42 @@ export class ExportJobs {
     }
   }
 }
-export function createHandler({ jobs, authorize }) {
+export function createHandler({ jobs, authorize, login }) {
   const limits = new Map();
+  const loginLimits = new Map();
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, private'); res.setHeader('X-Content-Type-Options', 'nosniff');
     const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
     try {
       const route = new URL(req.url, 'http://internal').pathname;
-      if (req.method === 'GET' && route === '/health') { json(200, { status: 'ready' }); return; }
+      if (req.method === 'GET' && route === '/health') { json(200, { status: 'ready', nativeLogin: typeof login === 'function' }); return; }
       const now = Date.now(), ip = req.socket.remoteAddress;
       for (const [key, item] of limits) if (item.until < now) limits.delete(key);
       const limit = limits.get(ip) ?? { count: 0, until: now+60000 }; limit.count++; limits.set(ip, limit);
       if (limit.count > 90 || limits.size > 10000) throw new HttpError(429, 'Demasiadas solicitudes. Espera un momento.');
+      if (route === '/session' && req.method === 'POST' && login) {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new HttpError(415, 'Solicitud inválida.');
+        for (const [key, item] of loginLimits) if (item.until < now) loginLimits.delete(key);
+        const enforceLimit = key => {
+          const item = loginLimits.get(key) ?? { count: 0, until: now + 60000 };
+          item.count++; loginLimits.set(key, item);
+          if (item.count > 5 || loginLimits.size > 10000) throw new HttpError(429, 'Demasiados intentos. Espera un minuto.');
+        };
+        enforceLimit('ip:' + ip);
+        let size = 0; const chunks = [];
+        for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+          size += chunk.length;
+          if (size > 4096) { req.resume(); throw new HttpError(413, 'Solicitud demasiado grande.'); }
+          chunks.push(chunk);
+        }
+        let data;
+        try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { throw new HttpError(400, 'Solicitud inválida.'); }
+        if (typeof data?.email === 'string') {
+          enforceLimit('account:' + createHash('sha256').update(data.email.trim().toLowerCase()).digest('hex'));
+        }
+        json(200, await login(data)); return;
+      }
       const userId = await authorize(req);
       if (route === '/jobs' && req.method === 'GET') { const job=jobs.latest(userId); json(200, { job: job ? publicJob(job) : null }); return; }
       if (route === '/jobs' && req.method === 'POST') {
