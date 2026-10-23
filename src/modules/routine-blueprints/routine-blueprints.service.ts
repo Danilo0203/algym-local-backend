@@ -38,7 +38,7 @@ type DetailRow = {
 const blueprintColumns = "id, name, primary_goal, secondary_goal, source_routine_id, created_by, created_at, updated_at";
 const detailColumns = `day_of_week, exercise_id, exercise_order, block_type,
   sets, reps, rest_seconds, duration_minutes, target_rir, notes, exercise_name_snapshot`;
-const imagePattern = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/;
+const imagePattern = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif|mp4)$/;
 
 function iso(value: Date | string): string {
   return (value instanceof Date ? value : new Date(value)).toISOString();

@@ -8,7 +8,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import pg from 'pg';
 import { bootstrap } from './bootstrap.mjs';
-import { exportPackage, writePackage, importPackage, readPackage, validatePackage } from './transfer.mjs';
+import { exportPackage, writePackage, importPackage, readPackage, validatePackage, sha } from './transfer.mjs';
 
 test('portable migration validates contents, rolls back bad data, preserves every row and blocks existing operations', {
   skip: !process.env.ALGYM_INSTALLER_PG_BIN, timeout: 180000,
@@ -30,6 +30,16 @@ test('portable migration validates contents, rolls back bad data, preserves ever
     started=true; await bootstrap(request);
     client=new pg.Client({host:request.host,port,user:'postgres',password:request.adminPassword,database:request.database}); await client.connect();
     await client.query("INSERT INTO public.plans(id,name,duration_days,price) VALUES(9007199254740993,'Plan de prueba',30,123.45)");
+    await mkdir(path.join(media,'exercises'));
+    const demoMp4=await readFile(new URL('./fixtures/exercise.mp4',import.meta.url));
+    const demoGif=Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==','base64');
+    const demoFiles=[];
+    for(const [bytes,extension] of [[demoGif,'gif'],[demoMp4,'mp4']]) {
+      const filename=sha(bytes)+'.'+extension;demoFiles.push({bytes,filename});
+      await writeFile(path.join(media,'exercises',filename),bytes);
+      const url='/api/media/exercises/'+filename;
+      await client.query("INSERT INTO public.exercises(slug,name,provider,image_url,animation_url,is_active) VALUES($1,$2,'custom_local',$3,$3,true)",['demo-'+extension,'Demo '+extension,url]);
+    }
     const payload=await exportPackage(client,media,{kind:'test'});
     const owner=payload.tables.find(t=>t.schema==='auth'&&t.name==='users');
     const profiles=payload.tables.find(t=>t.name==='profiles');
@@ -38,13 +48,14 @@ test('portable migration validates contents, rolls back bad data, preserves ever
     const sequence=payload.sequences.find(s=>s.name==='plans_id_seq'); sequence.last_value='9007199254740993'; sequence.is_called=true;
     const file=path.join(root,'data.algym'); const report=await writePackage(file,payload);
     await assert.rejects(importPackage(request,file,media,report.sha256),/ya tiene datos/);
-    await client.query('DELETE FROM public.plans');
+    await client.query('DELETE FROM public.plans; DELETE FROM public.exercises');
+    for(const demo of demoFiles) await rm(path.join(media,'exercises',demo.filename));
     await assert.rejects(importPackage(request,file,media,'0'.repeat(64)),/cambió/);
     await assert.rejects(importPackage({...request,installationId:randomUUID()},file,media,report.sha256),/no pertenece/);
     const incompatible=structuredClone(payload); incompatible.migrations[0].sha256='0'.repeat(64);
     const incompatibleFile=path.join(root,'incompatible.algym'), incompatibleReport=await writePackage(incompatibleFile,incompatible);
     await assert.rejects(importPackage(request,incompatibleFile,media,incompatibleReport.sha256),/versión/);
-    assert.throws(()=>validatePackage({...payload,media:[{path:'../escape.png',base64:'a'}]}),/imagen/);
+    assert.throws(()=>validatePackage({...payload,media:[{path:'../escape.png',base64:'a'}]}),/multimedia/);
     const bad=structuredClone(payload); bad.tables.find(t=>t.name==='profiles').rows[0][profiles.columns.indexOf('id')]=randomUUID();
     const badFile=path.join(root,'bad.algym'), badReport=await writePackage(badFile,bad).catch(()=>({}));
     // A broken profile must be rejected before mutation (owner validation or FK verification).
@@ -63,6 +74,8 @@ test('portable migration validates contents, rolls back bad data, preserves ever
     const preview=await importPackage(request,file,media,report.sha256,true); assert.equal(preview.plans,1);
     assert.equal((await client.query('SELECT id FROM auth.users')).rows[0].id,oldId);
     assert.equal((await importPackage(request,file,media,report.sha256)).imported,true);
+    for(const demo of demoFiles) assert.deepEqual(await readFile(path.join(media,'exercises',demo.filename)),demo.bytes);
+    assert.equal((await client.query('SELECT count(*)::int n FROM public.exercises')).rows[0].n,2);
     assert.equal((await client.query('SELECT id FROM auth.users')).rows[0].id,newId);
     assert.equal((await client.query('SELECT id::text,price::text FROM public.plans')).rows[0].id,'9007199254740993');
     assert.equal((await client.query('SELECT price::text FROM public.plans')).rows[0].price,'123.45');

@@ -1,0 +1,4 @@
+# Conservar los bytes de migraciones al clonar en Windows.
+# Sus SHA-256 se registran al instalar; CRLF cambiaria esos hashes.
+*.sql text eol=lf
+*.sh text eol=lf

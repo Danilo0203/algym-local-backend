@@ -106,7 +106,7 @@ function mapRoutineRow(row: RoutineRow): RoutineRecord {
 }
 
 function mapRoutineDetailRow(row: RoutineDetailRow): RoutineDetailRecord {
-  const localImageUrl = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(row.exercise_image_url ?? "")
+  const localImageUrl = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif|mp4)$/.test(row.exercise_image_url ?? "")
     ? row.exercise_image_url
     : null;
   return {

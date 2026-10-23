@@ -44,6 +44,28 @@ test("web import requires owner and origin, confirms the reviewed package, and p
     assert.equal((await request(app).post(`/packages/${id}/import`).set("Origin", origin).send({ confirmed: true, sha256: digest })).status, 202);
     const queued = JSON.parse(await readFile(path.join(root, "inbox", id, "request.json"), "utf8"));
     assert.equal(queued.userId, userId); assert.equal(queued.sessionId, sessionId); assert.equal(queued.sha256, digest);
+    const second = await request(app).post("/packages").set("Origin", origin).set("Content-Type", "application/octet-stream").send("valid");
+    const original = await request(app).post("/packages").set("Origin", origin).set("Content-Type", "application/octet-stream").send("valid");
+    assert.equal((await request(app).post(`/packages/${second.body.id}/review`).set("Origin", origin).send({sha256:digest,baselineId:original.body.id})).status,202);
+    const reviewRequest = JSON.parse(await readFile(path.join(root,"inbox",second.body.id,"request.json"),"utf8"));
+    assert.equal(reviewRequest.mode,"review"); assert.equal(reviewRequest.baselineSha256,digest);
+    assert.equal((await request(app).post(`/packages/${second.body.id}/update`).set("Origin", origin).send({confirmed:true,sha256:digest})).status,400);
+    const totals={inserted:1,updated:0,retained:2,unchanged:0,duplicates:0,ignoredDeletions:0};
+    const review={version:1,sha256:digest,planHash:"c".repeat(64),canApply:false,totals,tables:[],conflicts:[]};
+    const out=path.join(root,"outbox",second.body.id+".json");
+    await writeFile(out,JSON.stringify({tokenHash:reviewRequest.tokenHash,state:"reviewed",message:"review",updatedAt:new Date().toISOString(),review}));
+    assert.equal((await request(app).post(`/packages/${second.body.id}/update`).set("Origin", origin).send({confirmed:true,sha256:digest})).status,409);
+    review.canApply=true;
+    await writeFile(out,JSON.stringify({tokenHash:reviewRequest.tokenHash,state:"reviewed",message:"review",updatedAt:new Date().toISOString(),review}));
+    allowed=false;
+    assert.equal((await request(app).post(`/packages/${second.body.id}/update`).set("Origin", origin).send({confirmed:true,sha256:digest})).status,403);
+    allowed=true;
+    const update=await request(app).post(`/packages/${second.body.id}/update`).set("Origin", origin).send({confirmed:true,sha256:digest});
+    assert.equal(update.status,202);
+    const updateRequest=JSON.parse(await readFile(path.join(root,"inbox",update.body.id,"request.json"),"utf8"));
+    assert.equal(updateRequest.mode,"update"); assert.equal(updateRequest.reviewId,second.body.id);
+    const repeat=await request(app).post(`/packages/${second.body.id}/update`).set("Origin", origin).send({confirmed:true,sha256:digest});
+    assert.deepEqual(repeat.body,update.body);
     allowed = false; // The old account/session disappears during an actual import.
     const endpoint = `/jobs/${id}/status`;
     assert.equal((await request(app).post(endpoint).set("Origin", origin).set("x-algym-import-token", "0".repeat(64))).status, 404);

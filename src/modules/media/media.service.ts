@@ -6,11 +6,21 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
+import { isMp4 } from "./mp4.js";
 
 export type MediaKind = "exercises" | "products" | "avatars";
 
 const maxImageBytes = 5 * 1024 * 1024;
+const maxVideoBytes = 20 * 1024 * 1024;
 const filenamePattern = /^[a-f0-9]{64}\.(png|jpg|webp|gif)$/;
+const exerciseFilenamePattern = /^[a-f0-9]{64}\.(png|jpg|webp|gif|mp4)$/;
+function validFilename(kind: MediaKind, filename: string) {
+  return (kind === "exercises" ? exerciseFilenamePattern : filenamePattern).test(filename);
+}
+
+function mediaExtension(kind: MediaKind, bytes: Buffer) {
+  return imageExtension(bytes) ?? (kind === "exercises" && isMp4(bytes) ? "mp4" : null);
+}
 const avatarUrlPattern = /^\/api\/media\/avatars\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/;
 
 export function localAvatarUrl(value: string | null): string | null {
@@ -18,7 +28,7 @@ export function localAvatarUrl(value: string | null): string | null {
 }
 
 export async function lockMediaFilename(client: PoolClient, kind: MediaKind, filename: string) {
-  if (!filenamePattern.test(filename)) {
+  if (!validFilename(kind, filename)) {
     throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");
   }
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))", [
@@ -28,8 +38,8 @@ export async function lockMediaFilename(client: PoolClient, kind: MediaKind, fil
 
 export async function lockMediaBytes(client: PoolClient, kind: MediaKind, bytes: Buffer) {
   const digest = createHash("sha256").update(bytes).digest("hex");
-  const extension = imageExtension(bytes);
-  if (!extension) throw new AppError(400, "INVALID_MEDIA", "Formato de imagen no permitido");
+  const extension = mediaExtension(kind, bytes);
+  if (!extension) throw new AppError(400, "INVALID_MEDIA", "Formato de archivo no permitido");
   await lockMediaFilename(client, kind, `${digest}.${extension}`);
 }
 
@@ -43,7 +53,8 @@ function contentTypeForExtension(extension: string) {
     case "jpg": return "image/jpeg";
     case "webp": return "image/webp";
     case "gif": return "image/gif";
-    default: throw new AppError(400, "INVALID_MEDIA", "Formato de imagen no permitido");
+    case "mp4": return "video/mp4";
+    default: throw new AppError(400, "INVALID_MEDIA", "Formato de archivo no permitido");
   }
 }
 
@@ -64,7 +75,7 @@ function imageExtension(bytes: Buffer): string | null {
 }
 
 export async function requireMediaReadPermission(actorUserId: string, kind: MediaKind, filename: string) {
-  if (!filenamePattern.test(filename)) {
+  if (!validFilename(kind, filename)) {
     throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");
   }
 
@@ -127,11 +138,13 @@ export async function requireMediaReadPermission(actorUserId: string, kind: Medi
 }
 
 export async function saveMedia(kind: MediaKind, bytes: Buffer) {
-  if (bytes.length === 0 || bytes.length > maxImageBytes) {
-    throw new AppError(400, "INVALID_MEDIA", "La imagen debe medir como máximo 5 MB");
+  const extension = mediaExtension(kind, bytes);
+  if (!extension) throw new AppError(400, "INVALID_MEDIA", "Formato de archivo no permitido");
+  const maxBytes = extension === "mp4" ? maxVideoBytes : maxImageBytes;
+  if (bytes.length === 0 || bytes.length > maxBytes) {
+    throw new AppError(400, "INVALID_MEDIA", extension === "mp4"
+      ? "El video debe medir como máximo 20 MB" : "La imagen debe medir como máximo 5 MB");
   }
-  const extension = imageExtension(bytes);
-  if (!extension) throw new AppError(400, "INVALID_MEDIA", "Formato de imagen no permitido");
 
   const digest = createHash("sha256").update(bytes).digest("hex");
   const filename = `${digest}.${extension}`;
@@ -159,14 +172,14 @@ export async function saveMedia(kind: MediaKind, bytes: Buffer) {
 }
 
 export async function discardNewMedia(kind: MediaKind, filename: string) {
-  if (!filenamePattern.test(filename)) {
+  if (!validFilename(kind, filename)) {
     throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");
   }
   await rm(path.join(mediaRoot(), kind, filename), { force: true });
 }
 
 export async function readMedia(kind: MediaKind, filename: string) {
-  if (!filenamePattern.test(filename)) {
+  if (!validFilename(kind, filename)) {
     throw new AppError(400, "INVALID_MEDIA", "Nombre de archivo inválido");
   }
   try {
@@ -174,7 +187,7 @@ export async function readMedia(kind: MediaKind, filename: string) {
     let bytes: Buffer;
     try {
       const stats = await file.stat();
-      if (!stats.isFile() || stats.size > maxImageBytes) {
+      if (!stats.isFile() || stats.size > (filename.endsWith(".mp4") ? maxVideoBytes : maxImageBytes)) {
         throw new AppError(400, "INVALID_MEDIA", "Archivo local inválido");
       }
       bytes = await file.readFile();
@@ -185,7 +198,7 @@ export async function readMedia(kind: MediaKind, filename: string) {
     if (digest !== filename.slice(0, 64)) {
       throw new AppError(409, "MEDIA_CORRUPTED", "La imagen local no coincide con su hash");
     }
-    if (imageExtension(bytes) !== filename.split(".")[1]) {
+    if (mediaExtension(kind, bytes) !== filename.split(".")[1]) {
       throw new AppError(409, "MEDIA_CORRUPTED", "El formato de la imagen local no coincide");
     }
     return { bytes, contentType: contentTypeForExtension(filename.split(".")[1]!) };

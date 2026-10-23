@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const exerciseIdSchema = z.coerce.number().int().positive();
 export const exerciseNameSchema = z.string().trim().min(2).max(120);
-export const localExerciseMediaUrlSchema = z.string().regex(/^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/);
+export const localExerciseMediaUrlSchema = z.string().regex(/^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif|mp4)$/);
 const exerciseMetadataItemSchema = z.string().trim().min(1).max(100);
 const exerciseMetadataListSchema = z.array(exerciseMetadataItemSchema).max(20);
 const exerciseTypeSchema = z.enum(["strength", "cardio", "mobility", "stretching", "balance"]);
@@ -26,8 +26,9 @@ export const createExerciseSchema = z.object({
   message: "El nombre del archivo requiere una imagen local",
 });
 
+// Preserve the existing upload contract: image_base64/image_url can also hold MP4 media.
 const exerciseImagePayload = {
-  image_base64: z.string().min(1).max(7_000_000),
+  image_base64: z.string().min(1).max(28_000_000),
   original_file_name: z.string().max(255).optional(),
 };
 
@@ -46,11 +47,11 @@ export const attachExerciseImageSchema = z.object({
 
 export function decodeExerciseImage(base64: string): Buffer {
   const bytes = Buffer.from(base64, "base64");
-  if (bytes.length === 0 || bytes.length > 5 * 1024 * 1024
+  if (bytes.length === 0 || bytes.length > 20 * 1024 * 1024
     || bytes.toString("base64") !== base64) {
     throw new z.ZodError([{
       code: "custom", path: ["image_base64"],
-      message: "La imagen debe estar codificada en base64 y medir como máximo 5 MB",
+      message: "El archivo debe estar codificado en base64 y medir como máximo 20 MB",
     }]);
   }
   return bytes;

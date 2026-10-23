@@ -192,3 +192,98 @@ test("imágenes locales exigen vínculo y permiso de lectura, y conservan bytes"
   const wrongName = await request(app).get("/media/exercises/archivo.png").set("Cookie", owner.cookie);
   assert.equal(wrongName.status, 400);
 });
+
+test("MP4 se crea, se reemplaza y se reproduce solo en la rutina del cliente, sin alterar GIF", async () => {
+  const owner = await createUser("owner");
+  const client = await createUser("client");
+  const other = await createUser("client");
+  const { readFile } = await import("node:fs/promises");
+  const mp4 = await readFile(new URL("../../test/fixtures/exercise.mp4", import.meta.url));
+  const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+  const upload = { name: "ZZTEST MEDIA MP4", image_base64: mp4.toString("base64"), original_file_name: "demo.mp4" };
+  assert.equal((await request(app).post("/exercises/with-image").send(upload)).status, 401);
+  assert.equal((await request(app).post("/exercises/with-image").set("Cookie", client.cookie).send(upload)).status, 403);
+  const video = await request(app).post("/exercises/with-image").set("Cookie", owner.cookie).send(upload);
+  assert.equal(video.status, 201, JSON.stringify(video.body));
+  assert.match(video.body.image_url, /\.mp4$/);
+  const animation = await request(app).post("/exercises/with-image").set("Cookie", owner.cookie)
+    .send({ name: "ZZTEST MEDIA GIF conservado", image_base64: gif.toString("base64") });
+  assert.equal(animation.status, 201);
+  const videoPath = video.body.image_url.replace("/api", "");
+  const gifPath = animation.body.image_url.replace("/api", "");
+  assert.equal((await request(app).get(videoPath).set("Cookie", client.cookie)).status, 403);
+  const routineId = adminValue(`INSERT INTO public.routines (user_id, created_by, name, status, is_active)
+    VALUES ('${client.userId}', '${owner.userId}', 'ZZTEST MEDIA rutina MP4', 'active', true) RETURNING id`);
+  adminSql(`INSERT INTO public.routine_details (routine_id, day_of_week, exercise_id)
+    VALUES ('${routineId}', 1, ${video.body.id}), ('${routineId}', 1, ${animation.body.id})`);
+  const routine = await request(app).get("/me/routine").set("Cookie", client.cookie);
+  assert.equal(routine.status, 200, JSON.stringify(routine.body));
+  assert.ok(routine.body.workspace.activeDetails.some((d: { exercise_image_url: string }) => d.exercise_image_url === video.body.image_url));
+  assert.ok(routine.body.workspace.activeDetails.some((d: { exercise_image_url: string }) => d.exercise_image_url === animation.body.image_url));
+  const catalog = await request(app).get("/exercises").set("Cookie", owner.cookie);
+  assert.equal(catalog.body.data.find((e: { id: number }) => e.id === video.body.id).image_url, video.body.image_url);
+
+  // superagent does not parse video/mp4 as a Buffer by default.
+  const fetchVideo = (range?: string) => {
+    const req = request(app).get(videoPath).set("Cookie", client.cookie).buffer(true)
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => callback(null, Buffer.concat(chunks)));
+        res.on("error", callback);
+      });
+    return range ? req.set("Range", range) : req;
+  };
+  const full = await fetchVideo();
+  assert.equal(full.status, 200);
+  assert.equal(full.headers["content-type"], "video/mp4");
+  assert.equal(full.headers["accept-ranges"], "bytes");
+  assert.deepEqual(full.body, mp4);
+  for (const [range, start, end] of [["bytes=0-1", 0, 1], ["bytes=12-", 12, mp4.length - 1], ["bytes=-10", mp4.length - 10, mp4.length - 1]] as const) {
+    const part = await fetchVideo(range);
+    assert.equal(part.status, 206);
+    assert.equal(part.headers["content-range"], `bytes ${start}-${end}/${mp4.length}`);
+    assert.deepEqual(part.body, mp4.subarray(start, end + 1));
+  }
+  const unsatisfied = await fetchVideo(`bytes=${mp4.length}-`);
+  assert.equal(unsatisfied.status, 416);
+  assert.equal(unsatisfied.headers["content-range"], `bytes */${mp4.length}`);
+  assert.equal((await request(app).get(videoPath).set("Range", "bytes=0-1")).status, 401);
+  assert.equal((await request(app).get(videoPath).set("Cookie", other.cookie).set("Range", "bytes=0-1")).status, 403);
+  const head = await request(app).head(videoPath).set("Cookie", client.cookie);
+  assert.equal(head.status, 200);
+  assert.equal(Number(head.headers["content-length"]), mp4.length);
+  assert.deepEqual((await request(app).get(gifPath).set("Cookie", client.cookie)).body, gif);
+
+  for (const [bytes, extension] of [[gif, "gif"], [mp4, "mp4"]] as const) {
+    const replacement = await request(app).post("/exercises/image-attachment").set("Cookie", owner.cookie)
+      .send({ exercise_id: video.body.id, image_base64: bytes.toString("base64"), original_file_name: `demo.${extension}` });
+    assert.equal(replacement.status, 200, JSON.stringify(replacement.body));
+    assert.ok(replacement.body.image_url.endsWith(`.${extension}`));
+  }
+  assert.deepEqual((await request(app).get(gifPath).set("Cookie", client.cookie)).body, gif);
+  for (const bytes of [Buffer.from("fake video"), mp4.subarray(0, 24)]) {
+    const rejected = await request(app).post("/exercises/with-image").set("Cookie", owner.cookie)
+      .send({ ...upload, image_base64: bytes.toString("base64") });
+    assert.equal(rejected.status, 400);
+  }
+  for (const kind of ["products", "avatars"] as const) {
+    await assert.rejects(saveMedia(kind, mp4), /Formato de archivo no permitido/);
+    assert.equal((await request(app).get(videoPath.replace("exercises", kind)).set("Cookie", owner.cookie)).status, 400);
+  }
+  const oversizedGif = Buffer.concat([gif, Buffer.alloc(5 * 1024 * 1024)]);
+  await assert.rejects(saveMedia("exercises", oversizedGif), /5 MB/);
+  const extraData = Buffer.alloc(6 * 1024 * 1024);
+  extraData.writeUInt32BE(extraData.length, 0);
+  extraData.write("free", 4);
+  const largeVideo = await request(app).post("/exercises/with-image").set("Cookie", owner.cookie)
+    .send({ ...upload, name: "ZZTEST MEDIA MP4 mayor de 5 MB", image_base64: Buffer.concat([mp4, extraData]).toString("base64") });
+  assert.equal(largeVideo.status, 201, JSON.stringify(largeVideo.body));
+  // Valid MP4 padded with a free box remains subject to the 20 MB limit.
+  const padding = Buffer.alloc(20 * 1024 * 1024);
+  padding.writeUInt32BE(padding.length, 0);
+  padding.write("free", 4);
+  await assert.rejects(saveMedia("exercises", Buffer.concat([mp4, padding])), /20 MB/);
+  adminSql(`UPDATE public.routines SET status = 'archived', is_active = false WHERE id = '${routineId}'`);
+  assert.equal((await request(app).get(videoPath).set("Cookie", client.cookie)).status, 403);
+});

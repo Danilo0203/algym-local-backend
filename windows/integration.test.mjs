@@ -81,6 +81,41 @@ test('fresh private cluster, 38 migrations, owner login, retry, and foreign-inst
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: request.owner.email, password: request.owner.password }) });
     assert.equal(response.status, 200, await response.text());
     assert.match(response.headers.get('set-cookie'), /algym_session=/);
+    // Exercise media in the compiled Windows payload: preserve GIF and allow MP4 for clients.
+    const ownerCookie = response.headers.get('set-cookie').split(';')[0];
+    const requestJson = (url, body, cookie = ownerCookie) => fetch(`http://127.0.0.1:${apiPort}${url}`, {
+      method: 'POST', headers: {'Content-Type':'application/json',cookie}, body:JSON.stringify(body) });
+    const mp4 = await readFile(new URL('./fixtures/exercise.mp4', import.meta.url));
+    const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==','base64');
+    const created = [];
+    for (const [bytes,extension] of [[gif,'gif'],[mp4,'mp4']]) {
+      const upload = await requestJson('/exercises/with-image',{name:`Demo ${extension}`,image_base64:bytes.toString('base64')});
+      assert.equal(upload.status,201); const item=await upload.json();
+      assert.ok(item.image_url.endsWith(`.${extension}`)); created.push(item);
+    }
+    const clientId=randomUUID(); const clientPassword='Client media test 123';
+    await admin.query("INSERT INTO auth.users(id,email,encrypted_password,raw_user_meta_data,created_at,updated_at) VALUES($1,$2,$3,'{}',now(),now())",
+      [clientId,'media-client@example.test',await bcrypt.hash(clientPassword,10)]);
+    await admin.query("INSERT INTO public.profiles(id,full_name,phone,birth_date,gender,role,biometric_id,is_active) VALUES($1,'Cliente MP4','55555555','1990-01-01','male','client',999991,true)",[clientId]);
+    const routine=(await admin.query("INSERT INTO public.routines(user_id,created_by,name,status,is_active) VALUES($1,$2,'Rutina MP4','active',true) RETURNING id",[clientId,user.id])).rows[0];
+    for(const item of created) await admin.query('INSERT INTO public.routine_details(routine_id,day_of_week,exercise_id) VALUES($1,1,$2)',[routine.id,item.id]);
+    const login=await requestJson('/auth/login',{email:'media-client@example.test',password:clientPassword});
+    assert.equal(login.status,200); const clientCookie=login.headers.get('set-cookie').split(';')[0];
+    const routineResponse=await fetch(`http://127.0.0.1:${apiPort}/me/routine`,{headers:{cookie:clientCookie}});
+    assert.equal(routineResponse.status,200); const details=(await routineResponse.json()).workspace.activeDetails;
+    for(const item of created) assert.ok(details.some(d=>d.exercise_image_url===item.image_url));
+    for(const [index,bytes] of [gif,mp4].entries()) {
+      const mediaUrl=`http://127.0.0.1:${apiPort}${created[index].image_url.replace('/api','')}`;
+      const media=await fetch(mediaUrl,{headers:{cookie:clientCookie}});
+      assert.equal(media.status,200);assert.deepEqual(Buffer.from(await media.arrayBuffer()),bytes);
+      assert.equal((await fetch(mediaUrl)).status,401);
+    }
+    const videoUrl=`http://127.0.0.1:${apiPort}${created[1].image_url.replace('/api','')}`;
+    const range=await fetch(videoUrl,{headers:{cookie:clientCookie,range:'bytes=0-1'}});
+    assert.equal(range.status,206);assert.equal(range.headers.get('content-type'),'video/mp4');
+    assert.deepEqual(Buffer.from(await range.arrayBuffer()),mp4.subarray(0,2));
+    assert.equal((await fetch(videoUrl,{headers:{cookie:clientCookie,range:`bytes=${mp4.length}-`}})).status,416);
+
     const connection = ['-h', request.host, '-p', String(request.port), '-U', 'postgres'];
     run('pg_dump', [...connection, '-d', request.database, '-Fc', '-f', path.join(root, 'backup.dump')]);
     await admin.query('CREATE DATABASE algym_restore_verification');

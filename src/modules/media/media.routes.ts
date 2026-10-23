@@ -17,6 +17,22 @@ mediaRouter.get("/:kind/:filename", async (request, response, next) => {
     const file = await readMedia(kind, filename);
     response.set("Content-Type", file.contentType);
     response.set("Cache-Control", "private, max-age=86400, immutable");
+    if (file.contentType === "video/mp4") {
+      response.set("Accept-Ranges", "bytes");
+      const ranges = request.range(file.bytes.length, { combine: true });
+      if (ranges === -1 || ranges === -2) {
+        response.set("Cache-Control", "no-store");
+        response.set("Content-Range", `bytes */${file.bytes.length}`);
+        response.status(416).end();
+        return;
+      }
+      if (ranges && ranges.type === "bytes" && ranges.length === 1) {
+        const { start, end } = ranges[0]!;
+        response.set("Content-Range", `bytes ${start}-${end}/${file.bytes.length}`);
+        response.status(206).send(file.bytes.subarray(start, end + 1));
+        return;
+      }
+    }
     response.status(200).send(file.bytes);
   } catch (error) {
     next(error);

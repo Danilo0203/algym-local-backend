@@ -44,3 +44,21 @@ uploads/
 .migration-work/
 .npm-cache/
 .pnpm-store/
+
+# Entregas, respaldos y secretos privados (nunca publicar)
+*.algym
+*.dump
+*.backup
+*.exe
+*.zip
+*.7z
+*.pfx
+*.p12
+*.key
+*.pem
+export.json
+installation.json
+deploy.env
+Respaldos-Hostinger/
+hostinger/config/
+hostinger/jobs/

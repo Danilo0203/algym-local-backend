@@ -9,7 +9,7 @@ import pg from 'pg';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const hash = /^[a-f0-9]{64}$/;
-const terminal = state => ['succeeded', 'failed'].includes(state);
+const terminal = state => ['reviewed', 'succeeded', 'failed'].includes(state);
 async function json(file) {
   const info = await lstat(file);
   if (!info.isFile() || info.isSymbolicLink() || info.size > 65536) throw new Error('Invalid metadata');
@@ -32,18 +32,21 @@ async function authorize(request, installation) {
     if (!rows.length) throw new Error('Owner session required');
   } finally { await client.query('ROLLBACK').catch(() => {}); await client.end(); }
 }
-async function execute(appRoot, dataRoot, packageFile, digest, resultFile) {
+async function execute(appRoot, dataRoot, packageFile, digest, resultFile, options = {}) {
   const executable = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return await new Promise((resolve, reject) => {
     const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
       path.join(appRoot, 'tools', 'Apply-AlGymData.ps1'), '-AppRoot', appRoot, '-DataRoot', dataRoot,
-      '-Package', packageFile, '-ExpectedHash', digest, '-Headless', '-ResultPath', resultFile],
+      '-Package', packageFile, '-ExpectedHash', digest, '-Headless', '-ResultPath', resultFile,
+      '-Mode', options.mode ?? 'initial', ...(options.baselineFile ? ['-BaselinePackage', options.baselineFile] : []),
+      ...(options.expectedPlan ? ['-ExpectedPlan', options.expectedPlan] : [])],
     { windowsHide: true, stdio: 'ignore' });
     child.on('error', reject); child.on('exit', code => resolve(code));
   });
 }
 function safeMessage(error) {
   const message = String(error?.message ?? error);
+  if (/respaldo original|posterior a la última|cuentas de origen|datos locales cambiaron|revisa la actualización/i.test(message)) return message.slice(0, 400);
   if (/ya tiene datos|instalación nueva|otro respaldo/i.test(message)) return 'Este equipo ya tiene datos. La importación inicial no puede reemplazar operaciones existentes.';
   if (/versión|esquema|migracion/i.test(message)) return 'La versión del respaldo no coincide con la instalación. Prepara un paquete compatible.';
   if (/Owner session required/.test(message)) return 'La sesión propietaria expiró. Inicia sesión y vuelve a seleccionar el respaldo.';
@@ -57,22 +60,24 @@ export async function processJob({ appRoot, dataRoot, id, authorizeJob = authori
   const prior = await json(output).catch(() => null);
   if (terminal(prior?.state)) return;
   let request, work;
-  const status = (state, message) => atomicJson(output, { tokenHash: request.tokenHash, state, message, updatedAt: new Date().toISOString() });
+  const status = (state, message, review) => atomicJson(output, { tokenHash: request.tokenHash, state, message, review, updatedAt: new Date().toISOString() });
   try {
     if ((await lstat(folder)).isSymbolicLink() || !(await lstat(folder)).isDirectory()) return;
     await lstat(path.join(folder, 'ready'));
     request = await json(path.join(folder, 'request.json'));
     if (request.version !== 1 || !uuid.test(request.userId) || !uuid.test(request.sessionId) ||
-        !hash.test(request.sha256) || !hash.test(request.tokenHash) || !Number.isFinite(request.createdAt)) return;
+        !hash.test(request.sha256) || !hash.test(request.tokenHash) || !Number.isFinite(request.createdAt) ||
+        !['initial','review','update'].includes(request.mode ?? 'initial') ||
+        (request.baselineSha256 && !hash.test(request.baselineSha256))) return;
     const completed = await json(path.join(dataRoot, 'private', 'last-import.json')).catch(() => null);
     // Recover a job interrupted after COMMIT but before its browser status was written.
-    if (prior?.state === 'running' && completed?.sha256 === request.sha256) {
+    if ((request.mode ?? 'initial') === 'initial' && prior?.state === 'running' && completed?.sha256 === request.sha256) {
       await status('succeeded', 'Este respaldo ya está importado. Los registros se conservaron sin duplicarlos.'); return;
     }
     if (Date.now() - request.createdAt > 1800000 || request.createdAt > Date.now() + 60000) throw new Error('Owner session required');
     const installation = await json(path.join(dataRoot, 'private', 'installation.json'));
     await authorizeJob(request, installation);
-    await status('running', 'Preparando el respaldo previo. El sistema se reconectará al terminar.');
+    await status('running', request.mode === 'review' ? 'Comparando los respaldos con los datos locales…' : 'Preparando el respaldo previo. El sistema se reconectará al terminar.');
     const file = path.join(folder, 'data.algym'), info = await lstat(file);
     if (!info.isFile() || info.isSymbolicLink() || info.size > 268435456) throw new Error('Invalid package');
     work = path.join(dataRoot, 'private', `web-import-${id}`);
@@ -80,11 +85,34 @@ export async function processJob({ appRoot, dataRoot, id, authorizeJob = authori
     const copy = path.join(work, 'data.algym'); await copyFile(file, copy);
     const bytes = await readFile(copy);
     if (bytes.length > 268435456 || createHash('sha256').update(bytes).digest('hex') !== request.sha256) throw new Error('Package changed');
+    const options = {mode: request.mode ?? 'initial'};
+    let baselineHash = request.baselineSha256;
+    if (request.mode === 'update') {
+      if (!uuid.test(request.reviewId)) throw new Error('Revisa la actualización nuevamente.');
+      const reviewed = await json(path.join(root, 'outbox', request.reviewId + '.json'));
+      const reviewRequest = await json(path.join(root, 'inbox', request.reviewId, 'request.json'));
+      if (reviewed.state !== 'reviewed' || !reviewed.review?.canApply || !hash.test(reviewed.review.planHash) ||
+          reviewed.review.sha256 !== request.sha256 || reviewRequest.userId !== request.userId ||
+          reviewed.tokenHash !== reviewRequest.tokenHash || Date.now() - Date.parse(reviewed.updatedAt) > 1800000)
+        throw new Error('Revisa la actualización nuevamente.');
+      options.expectedPlan = reviewed.review.planHash;
+      baselineHash = reviewRequest.baselineSha256;
+    }
+    if (baselineHash) {
+      const baseline = path.join(folder, 'baseline.algym'), info = await lstat(baseline);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 268435456) throw new Error('Invalid baseline');
+      options.baselineFile = path.join(work, 'baseline.algym');
+      await copyFile(baseline, options.baselineFile);
+      if (createHash('sha256').update(await readFile(options.baselineFile)).digest('hex') !== baselineHash) throw new Error('El respaldo original cambió. Selecciónalo de nuevo.');
+    }
     const resultFile = path.join(work, 'result.json');
-    const code = await executeJob(appRoot, dataRoot, copy, request.sha256, resultFile);
+    const code = await executeJob(appRoot, dataRoot, copy, request.sha256, resultFile, options);
     const result = await json(resultFile).catch(() => null);
     if (code !== 0 || !result?.success) throw new Error(result?.message ?? 'Import incomplete');
-    await status('succeeded', 'Importación verificada. Inicia sesión con una cuenta del respaldo.');
+    if (request.mode === 'review') {
+      if (result.review?.sha256 !== request.sha256) throw new Error('Invalid review');
+      await status('reviewed', result.review.alreadyApplied ? 'Este respaldo ya fue aplicado; no se duplicaron datos.' : result.review.canApply ? 'Comparación terminada. Revisa el resumen antes de aplicar.' : 'Hay conflictos que requieren revisión. No se cambiaron datos.', result.review);
+    } else await status('succeeded', request.mode === 'update' ? 'Actualización verificada. Se conservaron los registros locales y las cuentas del equipo.' : 'Importación verificada. Inicia sesión con una cuenta del respaldo.');
   } catch (error) {
     if (request && hash.test(request.tokenHash)) await status('failed', safeMessage(error));
   } finally {

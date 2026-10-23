@@ -39,7 +39,7 @@ const columns = `id, slug, name, display_name, display_name_es, provider, provid
   raw_payload, last_synced_at, is_active, is_favorite, is_preview_hidden`;
 
 function toExercise(row: ExerciseRow) {
-  const localImage = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(row.image_url ?? "")
+  const localImage = /^\/api\/media\/exercises\/[a-f0-9]{64}\.(png|jpg|webp|gif|mp4)$/.test(row.image_url ?? "")
     ? row.image_url
     : null;
   return {

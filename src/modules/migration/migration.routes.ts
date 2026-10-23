@@ -54,6 +54,22 @@ export function createMigrationRouter(store: MigrationStore | null, authorize = 
       response.status(202).json(await store.start(z.string().uuid().parse(request.params.id), session.userId, session.sessionId, body.sha256));
     } catch (error) { next(error); }
   });
+  router.post("/packages/:id/review", async (request, response, next) => {
+    try {
+      const session = await authorize(request);
+      if (!store) throw new AppError(503, "NOT_AVAILABLE", "Actualización no disponible.");
+      const body = z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), baselineId: z.string().uuid().optional() }).strict().parse(request.body);
+      response.status(202).json(await store.start(z.string().uuid().parse(request.params.id), session.userId, session.sessionId, body.sha256, {mode:"review",baselineId:body.baselineId}));
+    } catch(error) { next(error); }
+  });
+  router.post("/packages/:id/update", async (request, response, next) => {
+    try {
+      const session = await authorize(request);
+      if (!store) throw new AppError(503, "NOT_AVAILABLE", "Actualización no disponible.");
+      const body = z.object({ confirmed:z.literal(true), sha256:z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(request.body);
+      response.status(202).json(await store.update(z.string().uuid().parse(request.params.id), session.userId, session.sessionId, body.sha256));
+    } catch(error) { next(error); }
+  });
   return router;
 }
 

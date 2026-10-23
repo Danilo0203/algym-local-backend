@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { validateRequest } from './bootstrap.mjs';
+import { isMp4 } from '../dist/modules/media/mp4.js';
 
 const LIMIT = 512 * 1024 * 1024;
 const id = (s) => '"' + s.replaceAll('"', '""') + '"';
@@ -34,18 +35,20 @@ export async function tableRows(client, t) {
     FROM ${qualified(t)}`)).rows.map((r) => r.row);
 }
 
-function assertImage(file) {
-  if (!/^(exercises|products|avatars)\/[a-f0-9]{64}\.(png|jpg|jpeg|gif|webp)$/.test(file.path ?? '') ||
-      typeof file.base64 !== 'string' || file.base64.length > 7 * 1024 * 1024) throw new Error('Archivo de imagen inválido.');
+function assertMedia(file) {
+  const video = /^exercises\/[a-f0-9]{64}\.mp4$/.test(file.path ?? '');
+  const maxBytes = (video ? 20 : 5) * 1024 * 1024;
+  if ((!video && !/^(exercises|products|avatars)\/[a-f0-9]{64}\.(png|jpg|jpeg|gif|webp)$/.test(file.path ?? '')) ||
+      typeof file.base64 !== 'string' || file.base64.length > Math.ceil(maxBytes / 3) * 4) throw new Error('Archivo multimedia inválido.');
   const bytes = Buffer.from(file.base64, 'base64');
-  if (!bytes.length || bytes.length > 5 * 1024 * 1024 || bytes.toString('base64') !== file.base64 ||
-      sha(bytes) !== file.sha256 || path.basename(file.path).split('.')[0] !== file.sha256) throw new Error('La imagen no coincide con su hash.');
+  if (!bytes.length || bytes.length > maxBytes || bytes.toString('base64') !== file.base64 ||
+      sha(bytes) !== file.sha256 || path.basename(file.path).split('.')[0] !== file.sha256) throw new Error('El archivo no coincide con su hash o supera el tamaño permitido.');
   const ext = path.extname(file.path);
-  const valid = ext === '.png' ? bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) :
+  const valid = video ? isMp4(bytes) : ext === '.png' ? bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) :
     ext === '.gif' ? /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString()) :
     ext === '.webp' ? bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP' :
     bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-  if (!valid) throw new Error('El contenido de una imagen no corresponde a su formato.');
+  if (!valid) throw new Error('El contenido de un archivo no corresponde a su formato.');
   return bytes;
 }
 
@@ -65,7 +68,7 @@ export function validatePackage(data) {
     names.add(key(t));
   }
   const files = new Map();
-  for (const f of data.media) { if (files.has(f.path)) throw new Error('Imagen duplicada.'); files.set(f.path, assertImage(f)); }
+  for (const f of data.media) { if (files.has(f.path)) throw new Error('Archivo multimedia duplicado.'); files.set(f.path, assertMedia(f)); }
   for (const [name, fields] of [['exercises', ['image_url', 'animation_url']], ['products', ['image_url']], ['profiles', ['avatar_url']]]) {
     const t = data.tables.find((t) => t.schema === 'public' && t.name === name);
     if (!t) continue;
@@ -75,7 +78,7 @@ export function validatePackage(data) {
       for (const row of t.rows) {
         const url = row[index];
         if (url && (!url.startsWith('/api/media/') || !files.has(url.slice(11)))) {
-          throw new Error(`Falta una imagen local de ${name}. Prepare los archivos antes de importar.`);
+          throw new Error(`Falta un archivo local de ${name}. Prepare los archivos antes de importar.`);
         }
       }
     }
@@ -151,7 +154,7 @@ export async function writePackage(filename, data) {
   return summary(data, sha(bytes));
 }
 
-async function assertTarget(client, request, data) {
+export async function assertTarget(client, request, data) {
   const identity = (await client.query(`SELECT current_setting('cluster_name') AS cluster,
     shobj_description(oid,'pg_database') AS marker FROM pg_database WHERE datname=current_database()`)).rows[0];
   if (identity?.cluster !== `AlGym-${request.installationId}` || identity.marker !== `AlGym Windows ${request.installationId}`)
@@ -264,7 +267,7 @@ export async function importPackage(raw, filename, mediaRoot, expectedHash, prev
       await mkdir(dir, { recursive: true });
       if ((await lstat(dir)).isSymbolicLink() || path.dirname(await realpath(dir)) !== await realpath(mediaRoot)) throw new Error('Ruta de imágenes inválida.');
       const destination = path.join(mediaRoot, file.path);
-      const bytes = assertImage(file);
+      const bytes = assertMedia(file);
       try { await writeFile(destination, bytes, { flag: 'wx', mode: 0o600 }); created.push(destination); }
       catch (e) {
         if (e.code !== 'EEXIST' || (await lstat(destination)).isSymbolicLink() || sha(await readFile(destination)) !== file.sha256) throw e;

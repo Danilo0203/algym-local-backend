@@ -45,3 +45,31 @@ test('worker confines jobs, rechecks owner, rejects changed files and recovers c
     authorized = false; await run(recovered); assert.equal((await status(recovered)).state, 'succeeded'); assert.equal(executions, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('update worker requires a protected owner review and carries the verified original snapshot', async () => {
+  const root=await mkdtemp(path.join(tmpdir(),'algym-update-worker-'));
+  await mkdir(path.join(root,'private'));await mkdir(path.join(root,'migration','outbox'),{recursive:true});
+  await writeFile(path.join(root,'private','installation.json'),'{}');
+  const bytes=Buffer.from('new'),old=Buffer.from('old'),digest=createHash('sha256').update(bytes).digest('hex'),baseHash=createHash('sha256').update(old).digest('hex');
+  const owner=randomUUID(),sessionId=randomUUID();let calls=0;
+  async function job(mode,reviewId,userId=owner) {
+    const id=randomUUID(),folder=path.join(root,'migration','inbox',id);await mkdir(folder,{recursive:true});
+    await writeFile(path.join(folder,'data.algym'),bytes);await writeFile(path.join(folder,'baseline.algym'),old);
+    await writeFile(path.join(folder,'request.json'),JSON.stringify({version:1,mode,reviewId,userId,sessionId,sha256:digest,baselineSha256:baseHash,tokenHash:'a'.repeat(64),createdAt:Date.now()}));
+    await writeFile(path.join(folder,'ready'),'');return id;
+  }
+  const run=id=>processJob({appRoot:'/trusted/app',dataRoot:root,id,authorizeJob:async()=>{},executeJob:async(_app,_root,_file,_hash,result,options)=>{
+    calls++;assert.deepEqual(await readFile(options.baselineFile),old);
+    if(options.mode==='update') assert.equal(options.expectedPlan,'c'.repeat(64));
+    await writeFile(result,JSON.stringify({success:true,review:options.mode==='review'?{sha256:digest,canApply:true,planHash:'c'.repeat(64)}:undefined}));return 0;
+  }});
+  const status=async id=>JSON.parse(await readFile(path.join(root,'migration','outbox',id+'.json'),'utf8'));
+  try {
+    const denied=await job('update',randomUUID());await run(denied);assert.equal((await status(denied)).state,'failed');assert.equal(calls,0);
+    const review=await job('review');await run(review);assert.equal((await status(review)).state,'reviewed');assert.equal(calls,1);
+    const wrongOwner=await job('update',review,randomUUID());await run(wrongOwner);assert.equal((await status(wrongOwner)).state,'failed');assert.equal(calls,1);
+    const update=await job('update',review);await run(update);assert.equal((await status(update)).state,'succeeded');assert.equal(calls,2);
+    await run(update);assert.equal(calls,2);
+    const tampered=await job('update',review);await writeFile(path.join(root,'migration','inbox',tampered,'baseline.algym'),'changed');await run(tampered);assert.equal((await status(tampered)).state,'failed');assert.equal(calls,2);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
