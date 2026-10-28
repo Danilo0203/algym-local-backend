@@ -178,6 +178,25 @@ export async function getBlueprint(actorUserId: string, id: string) {
   });
 }
 
+async function insertBlueprintDetails(client: PoolClient, blueprintId: string, input: CreateBlueprintInput) {
+  for (let dayIndex = 0; dayIndex < input.days.length; dayIndex++) {
+    const day = input.days[dayIndex]!;
+    for (let exerciseIndex = 0; exerciseIndex < day.exercises.length; exerciseIndex++) {
+      const exercise = day.exercises[exerciseIndex]!;
+      await client.query(`
+        INSERT INTO public.routine_blueprint_details
+          (blueprint_id, day_of_week, exercise_id, exercise_order,
+           block_type, sets, reps, rest_seconds, duration_minutes, target_rir, notes,
+           exercise_name_snapshot)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+          (SELECT COALESCE(display_name_es, display_name, name) FROM public.exercises WHERE id = $3))
+      `, [blueprintId, dayIndex + 1, exercise.exercise_id, exerciseIndex + 1,
+        exercise.block_type, exercise.sets, exercise.reps, exercise.rest_seconds,
+        exercise.duration_minutes, exercise.target_rir, exercise.notes ?? null]);
+    }
+  }
+}
+
 export async function createBlueprint(actorUserId: string, input: CreateBlueprintInput) {
   return withUserTransaction(actorUserId, async (client) => {
     await requireAccess(client, "manage");
@@ -187,20 +206,24 @@ export async function createBlueprint(actorUserId: string, input: CreateBlueprin
       VALUES ($1, $2, $3, $4) RETURNING id
     `, [input.title, input.primary_goal, input.secondary_goal, actorUserId]);
     const blueprintId = result.rows[0]!.id;
-    for (let dayIndex = 0; dayIndex < input.days.length; dayIndex++) {
-      const day = input.days[dayIndex]!;
-      for (let exerciseIndex = 0; exerciseIndex < day.exercises.length; exerciseIndex++) {
-        const exercise = day.exercises[exerciseIndex]!;
-        await client.query(`
-          INSERT INTO public.routine_blueprint_details
-            (blueprint_id, day_of_week, exercise_id, exercise_order,
-             block_type, sets, reps, rest_seconds, duration_minutes, target_rir)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-        `, [blueprintId, dayIndex + 1, exercise.exercise_id, exerciseIndex + 1,
-          exercise.block_type, exercise.sets, exercise.reps, exercise.rest_seconds,
-          exercise.duration_minutes, exercise.target_rir]);
-      }
-    }
+    await insertBlueprintDetails(client, blueprintId, input);
+    return { success: true, blueprintId };
+  });
+}
+
+export async function updateBlueprint(actorUserId: string, blueprintId: string, input: CreateBlueprintInput) {
+  return withUserTransaction(actorUserId, async (client) => {
+    await requireAccess(client, "manage");
+    // Assignments also lock this row, so they copy either the old or the complete new version.
+    await findBlueprint(client, blueprintId, true);
+    await client.query(`
+      UPDATE public.routine_blueprints
+      SET name = $2, primary_goal = $3, secondary_goal = $4, updated_at = now()
+      WHERE id = $1
+    `, [blueprintId, input.title, input.primary_goal, input.secondary_goal]);
+    await client.query("DELETE FROM public.routine_blueprint_details WHERE blueprint_id = $1", [blueprintId]);
+    await insertBlueprintDetails(client, blueprintId, input);
+    // Previously assigned routines are independent snapshots and retain their history/progress.
     return { success: true, blueprintId };
   });
 }

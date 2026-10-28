@@ -4,6 +4,7 @@ import { withUserTransaction } from "../../db/transaction.js";
 import { getOwnRoutineWorkspace } from "../customer-routines/customer-routines.service.js";
 import { localAvatarUrl } from "../media/media.service.js";
 import { getProfile } from "../profile/profile.service.js";
+import { getOwnRoutineProgress } from "./routine-progress.service.js";
 
 type OverviewRow = {
   full_name: string | null;
@@ -114,5 +115,8 @@ export async function getOwnRoutineData(actorUserId: string) {
   return {
     customer_name: overview?.full_name ?? "Cliente",
     workspace,
+    progress: workspace.activeRoutine
+      ? await getOwnRoutineProgress(actorUserId, workspace.activeRoutine.id)
+      : { routineId: null, completedDetailIds: [] },
   };
 }

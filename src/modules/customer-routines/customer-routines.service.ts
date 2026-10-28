@@ -384,6 +384,7 @@ async function getCustomerRoutineForManager(
   customerId: string,
   routineId: string,
 ): Promise<RoutineRecord> {
+  await lockCustomerRoutines(client, customerId);
   const routine = await findCustomerRoutine(client, customerId, routineId);
   if (!routine) throw routineNotFoundError;
   return routine;

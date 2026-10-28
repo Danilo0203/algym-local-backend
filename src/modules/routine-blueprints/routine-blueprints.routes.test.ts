@@ -126,6 +126,11 @@ test("plantillas locales: permisos, creación, asignación atómica y consulta",
     .set("Cookie", employee.cookie).send(body)).status, 403);
   assert.equal((await request(app).patch(`/routine-blueprints/${blueprintId}`)
     .set("Cookie", employee.cookie).send({ name: "No autorizado" })).status, 403);
+  assert.equal((await request(app).put(`/routine-blueprints/${blueprintId}`).send(body)).status, 401);
+  assert.equal((await request(app).put(`/routine-blueprints/${blueprintId}`)
+    .set("Cookie", customer.cookie).send(body)).status, 403);
+  assert.equal((await request(app).put(`/routine-blueprints/${blueprintId}`)
+    .set("Cookie", employee.cookie).send(body)).status, 403);
   assert.equal((await request(app).post(`/routine-blueprints/${blueprintId}/assign`)
     .set("Cookie", employee.cookie).send({ userId: customer.userId })).status, 403);
   const directWrite = await withUserTransaction(employee.userId, (client) =>
@@ -159,6 +164,69 @@ test("plantillas locales: permisos, creación, asignación atómica y consulta",
   assert.equal(detail.body.details[0].exercise_id, exerciseId);
   assert.equal(detail.body.assignments.length, 1);
 
+  const replacementId = Number(adminSql(`
+    INSERT INTO public.exercises (slug, name, provider, is_active)
+    VALUES ('zztest-blueprint-${randomUUID()}', 'ZZTEST BLUEPRINT EXERCISE ${randomUUID()}',
+            'custom_local', true) RETURNING id
+  `));
+  const originalRoutine = adminSql(`SELECT row_to_json(r)::text FROM public.routines r WHERE id = '${second.body.routineId}'`);
+  const originalDetails = adminSql(`SELECT json_agg(d ORDER BY d.id)::text FROM public.routine_details d WHERE routine_id = '${second.body.routineId}'`);
+  const updatedExercise = { ...body.days[0]!.exercises[0]!, exercise_id: replacementId,
+    sets: 4, reps: "12-15", rest_seconds: 0, duration_minutes: 0, target_rir: 0, notes: "Conservar técnica" };
+  const updatedBody = { ...body, title: "ZZTEST PLANTILLA EDITADA", secondary_goal: "mobility",
+    days: [{ exercises: [updatedExercise, body.days[0]!.exercises[0]!] }, { exercises: [updatedExercise] }] };
+  const updated = await request(app).put(`/routine-blueprints/${blueprintId}`)
+    .set("Cookie", employee.cookie).send(updatedBody);
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.blueprintId, blueprintId);
+  const afterEdit = await request(app).get(`/routine-blueprints/${blueprintId}`).set("Cookie", owner.cookie);
+  assert.equal(afterEdit.body.blueprint.name, updatedBody.title);
+  assert.equal(afterEdit.body.blueprint.secondary_goal, "mobility");
+  assert.equal(afterEdit.body.blueprint.created_by, detail.body.blueprint.created_by);
+  assert.equal(afterEdit.body.blueprint.created_at, detail.body.blueprint.created_at);
+  assert.deepEqual(afterEdit.body.details.map((d: { day_of_week: number; exercise_order: number; exercise_id: number }) =>
+    [d.day_of_week, d.exercise_order, d.exercise_id]), [[1, 1, replacementId], [1, 2, exerciseId], [2, 1, replacementId]]);
+  for (const key of ["sets", "reps", "rest_seconds", "duration_minutes", "target_rir", "notes"] as const) {
+    assert.equal(afterEdit.body.details[0][key], updatedExercise[key]);
+  }
+  assert.deepEqual(afterEdit.body.assignments, detail.body.assignments);
+  assert.equal(adminSql(`SELECT row_to_json(r)::text FROM public.routines r WHERE id = '${second.body.routineId}'`), originalRoutine);
+  assert.equal(adminSql(`SELECT json_agg(d ORDER BY d.id)::text FROM public.routine_details d WHERE routine_id = '${second.body.routineId}'`), originalDetails);
+  const updatedList = await request(app).get("/routine-blueprints").set("Cookie", owner.cookie);
+  const updatedStats = updatedList.body.data.find((item: { id: string }) => item.id === blueprintId);
+  assert.equal(updatedStats.day_count, 2);
+  assert.equal(updatedStats.exercise_count, 3);
+  assert.equal(updatedStats.assignment_count, 1);
+
+  // A failure after deleting the old rows and inserting one new row must roll back everything.
+  const invalidEdit = await request(app).put(`/routine-blueprints/${blueprintId}`)
+    .set("Cookie", owner.cookie).send({ ...updatedBody, title: "No debe guardarse",
+      days: [{ exercises: [updatedExercise, { ...updatedExercise, exercise_id: 999999999 }] }] });
+  assert.ok(invalidEdit.status >= 400);
+  for (const days of [[], [{ exercises: [] }], [{ exercises: [{ ...updatedExercise, sets: -1 }] }]]) {
+    const invalidMetrics = await request(app).put(`/routine-blueprints/${blueprintId}`)
+      .set("Cookie", owner.cookie).send({ ...updatedBody, days });
+    assert.equal(invalidMetrics.status, 400);
+  }
+  const afterFailedEdit = await request(app).get(`/routine-blueprints/${blueprintId}`).set("Cookie", owner.cookie);
+  assert.deepEqual(afterFailedEdit.body, afterEdit.body);
+  assert.equal((await request(app).put(`/routine-blueprints/${randomUUID()}`)
+    .set("Cookie", owner.cookie).send(body)).status, 404);
+
+  // Remove a day and an exercise; later assignments receive the saved content.
+  assert.equal((await request(app).put(`/routine-blueprints/${blueprintId}`)
+    .set("Cookie", owner.cookie).send({ ...updatedBody, days: [{ exercises: [updatedExercise] }] })).status, 200);
+  const afterDelete = await request(app).get(`/routine-blueprints/${blueprintId}`).set("Cookie", owner.cookie);
+  assert.equal(afterDelete.body.details.length, 1);
+  assert.equal(afterDelete.body.details[0].day_of_week, 1);
+  assert.equal(afterDelete.body.details[0].exercise_order, 1);
+  const newCustomer = await createUser("client");
+  const newAssignment = await request(app).post(`/routine-blueprints/${blueprintId}/assign`)
+    .set("Cookie", owner.cookie).send({ userId: newCustomer.userId });
+  assert.equal(newAssignment.status, 201);
+  assert.equal(adminSql(`SELECT exercise_id || ':' || sets || ':' || reps || ':' || rest_seconds
+    FROM public.routine_details WHERE routine_id = '${newAssignment.body.routineId}'`), `${replacementId}:4:12-15:0`);
+
   const saved = await request(app).post(`/routine-blueprints/from-routine/${second.body.routineId}`)
     .set("Cookie", owner.cookie);
   assert.equal(saved.status, 201);
@@ -173,5 +241,6 @@ test("plantillas locales: permisos, creación, asignación atómica y consulta",
   assert.equal(removed.status, 200);
   assert.equal(adminSql(`SELECT status FROM public.routines WHERE id = '${second.body.routineId}'`), "active");
   const afterRemoval = await request(app).get(`/routine-blueprints/${blueprintId}`).set("Cookie", owner.cookie);
-  assert.equal(afterRemoval.body.assignments.length, 0);
+  assert.equal(afterRemoval.body.assignments.length, 1);
+  assert.equal(afterRemoval.body.assignments[0].user_id, newCustomer.userId);
 });

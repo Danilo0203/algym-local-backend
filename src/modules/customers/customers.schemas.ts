@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { localPasswordSchema } from "../auth/auth.schemas.js";
+import { normalizeClientPhone } from "../auth/phone.js";
 import { createMembershipSchema } from "../memberships/memberships.schemas.js";
 import { paidMembershipForNewCustomerSchema } from "../payments/payments.schemas.js";
 import { customerIntakeSchema } from "./customer-intake.schemas.js";
@@ -176,9 +177,9 @@ export const customerCreateSchema = z.object({
   paid_membership: paidMembershipForNewCustomerSchema.optional(),
   intake: customerIntakeSchema.optional(),
 }).strict().refine(
-  (value) => value.password === undefined || Boolean(value.email?.trim()),
+  (value) => value.password === undefined || Boolean(value.email?.trim()) || normalizeClientPhone(value.phone) !== null,
   {
-    message: "La contraseña requiere un email",
+    message: "La contraseña requiere un correo o teléfono válido",
     path: ["password"],
   },
 ).refine(

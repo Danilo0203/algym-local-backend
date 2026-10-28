@@ -20,6 +20,7 @@ import {
   saveRoutineAsBlueprint,
   searchActiveClients,
   unassignBlueprint,
+  updateBlueprint,
 } from "./routine-blueprints.service.js";
 
 export const routineBlueprintsRouter = Router();
@@ -69,6 +70,15 @@ routineBlueprintsRouter.patch("/:id", async (request, response, next) => {
     const id = blueprintIdSchema.parse(request.params.id);
     const { name } = renameBlueprintSchema.parse(request.body);
     response.status(200).json(await renameBlueprint(session.userId, id, name));
+  } catch (error) { next(error); }
+});
+
+routineBlueprintsRouter.put("/:id", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const id = blueprintIdSchema.parse(request.params.id);
+    const input = createBlueprintSchema.parse(request.body);
+    response.status(200).json(await updateBlueprint(session.userId, id, input));
   } catch (error) { next(error); }
 });
 

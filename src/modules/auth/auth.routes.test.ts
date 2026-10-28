@@ -93,12 +93,11 @@ function runAdminSql(sql: string): void {
       "algym_test",
       "-v",
       "ON_ERROR_STOP=1",
-      "-c",
-      sql,
     ],
     {
       cwd: projectRoot,
-      stdio: "ignore",
+      stdio: ["pipe", "ignore", "ignore"],
+      input: Buffer.from(sql, "utf8"),
     },
   );
 }
@@ -481,7 +480,7 @@ test("POST /auth/change-password rechaza contraseña nueva corta", async () => {
 });
 
 test("POST /auth/change-password rechaza contraseña actual incorrecta", async () => {
-  const { email } = await createSyntheticUser();
+  const { email } = await createSyntheticUser({ role: "employee" });
   const agent = request.agent(app);
 
   await agent.post("/auth/login").send({
@@ -506,7 +505,7 @@ test("POST /auth/change-password rechaza contraseña actual incorrecta", async (
 });
 
 test("POST /auth/change-password rechaza contraseña nueva igual a la actual", async () => {
-  const { email } = await createSyntheticUser();
+  const { email } = await createSyntheticUser({ role: "employee" });
   const agent = request.agent(app);
 
   await agent.post("/auth/login").send({
@@ -532,7 +531,7 @@ test("POST /auth/change-password rechaza contraseña nueva igual a la actual", a
 });
 
 test("POST /auth/change-password actualiza la contraseña, revoca sesiones y limpia cookie", async () => {
-  const { email, userId } = await createSyntheticUser();
+  const { email, userId } = await createSyntheticUser({ role: "employee" });
   const agentA = request.agent(app);
   const agentB = request.agent(app);
   const newPassword = "NuevaClave123";
@@ -614,7 +613,7 @@ test("POST /auth/change-password actualiza la contraseña, revoca sesiones y lim
 
 test("POST /auth/change-password no modifica la contraseña de otro usuario", async () => {
   const userA = await createSyntheticUser();
-  const userB = await createSyntheticUser();
+  const userB = await createSyntheticUser({ role: "employee" });
   const agentB = request.agent(app);
   const newPassword = "ClaveUsuarioB9";
 

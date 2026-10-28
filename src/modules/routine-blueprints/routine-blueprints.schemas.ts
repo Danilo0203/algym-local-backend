@@ -13,13 +13,14 @@ const exerciseSchema = z.object({
   rest_seconds: z.number().int().min(0).max(3600).nullable(),
   duration_minutes: z.number().int().min(0).max(600).nullable(),
   target_rir: optionalNumber(0, 10),
+  notes: z.string().nullable().optional(),
 }).strict();
 
 export const createBlueprintSchema = z.object({
   title: z.string().trim().min(1).max(160),
   primary_goal: z.string().trim().min(1).max(80),
   secondary_goal: z.string().trim().max(80).nullable(),
-  days: z.array(z.object({ exercises: z.array(exerciseSchema).max(60) }).strict())
+  days: z.array(z.object({ exercises: z.array(exerciseSchema).min(1).max(60) }).strict())
     .min(1).max(7),
 }).strict().refine(
   (value) => value.days.some((day) => day.exercises.length > 0),

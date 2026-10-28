@@ -110,10 +110,16 @@ function runCommand(
   command: string,
   args: string[],
 ): void {
-  execFileSync(command, args, {
+  // Windows psql converts -c arguments through the active ANSI code page.
+  // Send SQL over UTF-8 stdin so accented fixture text is preserved.
+  const sqlIndex = command === "psql" ? args.indexOf("-c") : -1;
+  const sql = sqlIndex < 0 ? undefined : args[sqlIndex + 1];
+  const commandArgs = sqlIndex < 0 ? args : [...args.slice(0, sqlIndex), ...args.slice(sqlIndex + 2)];
+  execFileSync(command, commandArgs, {
     cwd: projectRoot,
     env: environment,
-    stdio: "inherit",
+    stdio: sql === undefined ? "inherit" : ["pipe", "inherit", "inherit"],
+    input: sql === undefined ? undefined : Buffer.from(sql, "utf8"),
   });
 }
 
@@ -470,3 +476,15 @@ runCommand("psql", [
   "-v", "ON_ERROR_STOP=1",
   "-f", path.join(migrationDirectory, "0036_local_permission_catalog.sql"),
 ]);
+
+for (const migrationName of [
+  "0037_sync_health_training_profiles.sql",
+  "0038_internal_user_biometrics.sql",
+  "0039_customer_phone_access.sql",
+  "0040_routine_exercise_completions.sql",
+]) {
+  runCommand("psql", [
+    ...connectionArguments, "-d", targetDatabaseName,
+    "-v", "ON_ERROR_STOP=1", "-f", path.join(migrationDirectory, migrationName),
+  ]);
+}

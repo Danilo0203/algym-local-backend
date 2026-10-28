@@ -7,9 +7,13 @@ import { AppError } from "../../errors/app-error.js";
 import {
   changePasswordBodySchema,
   loginBodySchema,
+  firstAccessBodySchema,
+  phoneAccessBodySchema,
 } from "./auth.schemas.js";
 import {
   authenticateUser,
+  activateCustomerPhoneAccess,
+  getCustomerPhoneAccess,
   changeAuthenticatedUserPassword,
   clearSessionCookie,
   getAuthenticatedUserContext,
@@ -18,6 +22,7 @@ import {
   revokeSessionToken,
   validateSessionToken,
 } from "./auth.service.js";
+import { normalizeClientPhone } from "./phone.js";
 
 export const authRouter = Router();
 
@@ -43,9 +48,9 @@ const loginRateLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator(request) {
     const ipKey = ipKeyGenerator(request.ip ?? "");
-    const emailKey = normalizeEmailForRateLimit(
-      request.body?.email,
-    );
+    const emailKey = typeof request.body?.phone === "string"
+      ? normalizeClientPhone(request.body.phone) ?? "invalid-phone"
+      : normalizeEmailForRateLimit(request.body?.email);
 
     return `${ipKey}:${emailKey}`;
   },
@@ -57,6 +62,33 @@ const loginRateLimiter = rateLimit({
       },
     });
   },
+});
+
+// Every visitor shares a local proxy; use both an aggregate ceiling and a
+// canonical per-number limit so formatting changes do not bypass throttling.
+const phoneIpRateLimiter = rateLimit({
+  windowMs: 60 * 1000, limit: 60, standardHeaders: true, legacyHeaders: false,
+  handler(_request, response) {
+    response.status(429).json({ error: { code: "RATE_LIMITED", message: "Demasiados intentos. Inténtalo de nuevo más tarde." } });
+  },
+});
+
+authRouter.post("/phone-access", phoneIpRateLimiter, loginRateLimiter, async (request, response, next) => {
+  try {
+    const body = phoneAccessBodySchema.parse(request.body);
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await getCustomerPhoneAccess(body));
+  } catch (error) { next(error); }
+});
+
+authRouter.post("/first-access", phoneIpRateLimiter, loginRateLimiter, async (request, response, next) => {
+  try {
+    const body = firstAccessBodySchema.parse(request.body);
+    const result = await activateCustomerPhoneAccess(body, request);
+    response.cookie(env.AUTH_COOKIE_NAME, result.token, getSessionCookieOptions());
+    response.setHeader("Cache-Control", "no-store");
+    response.status(200).json(result.context);
+  } catch (error) { next(error); }
 });
 
 const changePasswordRateLimiter = rateLimit({

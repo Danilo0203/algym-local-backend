@@ -12,6 +12,8 @@ import {
   authorizationScopeSchema,
   authenticatedUserContextSchema,
   changePasswordBodySchema,
+  firstAccessBodySchema,
+  phoneAccessBodySchema,
   loginBodySchema,
   sessionTokenSchema,
   type AuthenticatedUserContext,
@@ -24,6 +26,8 @@ type AuthUserRow = {
   email: string | null;
   encrypted_password: string | null;
   deleted_at: string | null;
+  customer_password_set_at?: Date | null;
+  last_sign_in_at?: Date | null;
 };
 
 type AuthUserPasswordRow = {
@@ -173,6 +177,71 @@ async function findUserByEmail(
   return result.rows[0] ?? null;
 }
 
+async function findCustomerByPhone(
+  phone: string,
+  connection: Pick<PoolClient, "query"> = pool,
+): Promise<AuthUserRow | null> {
+  const result = await connection.query<AuthUserRow & { is_active: boolean }>(`
+    SELECT u.id, u.email, u.encrypted_password, u.deleted_at,
+           u.customer_password_set_at, u.last_sign_in_at, candidate.is_active
+    FROM private.customer_ids_for_phone($1) AS candidate
+    JOIN auth.users AS u ON u.id = candidate.id
+  `, [phone]);
+  if (result.rows.length > 1) {
+    throw new AppError(409, "PHONE_NOT_UNIQUE", "Este teléfono está asociado a más de un cliente. Consulta en recepción.");
+  }
+  const user = result.rows[0];
+  return user?.is_active ? user : null;
+}
+
+function hasEstablishedPassword(user: AuthUserRow): boolean {
+  return Boolean(user.customer_password_set_at || user.last_sign_in_at || (user.email?.trim() && user.encrypted_password));
+}
+
+export async function getCustomerPhoneAccess(input: unknown): Promise<{ requiresPasswordSetup: boolean }> {
+  const body = phoneAccessBodySchema.parse(input);
+  const user = await findCustomerByPhone(body.phone);
+  if (!user) {
+    throw new AppError(400, "PHONE_ACCESS_UNAVAILABLE", "Revisa tu teléfono o consulta en recepción para habilitar tu acceso.");
+  }
+  return { requiresPasswordSetup: !hasEstablishedPassword(user) };
+}
+
+export async function activateCustomerPhoneAccess(input: unknown, request: Request): Promise<{
+  context: AuthenticatedUserContext; token: string;
+}> {
+  const body = firstAccessBodySchema.parse(input);
+  const candidate = await findCustomerByPhone(body.phone);
+  if (!candidate) throw invalidCredentialsError;
+  const passwordHash = await bcrypt.hash(body.password, 10);
+  return withUserTransaction(candidate.id, async (client) => {
+    // Serialize first activation and admin resets on the same user row.
+    const locked = await client.query<AuthUserRow>(`
+      SELECT id, email, encrypted_password, deleted_at, customer_password_set_at, last_sign_in_at
+      FROM auth.users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+    `, [candidate.id]);
+    const user = locked.rows[0];
+    if (!user) throw invalidCredentialsError;
+    if (hasEstablishedPassword(user)) {
+      throw new AppError(409, "FIRST_ACCESS_COMPLETED", "Tu cuenta ya tiene contraseña. Inicia sesión o solicita el cambio al administrador.");
+    }
+    const current = await findCustomerByPhone(body.phone, client);
+    if (current?.id !== candidate.id) throw invalidCredentialsError;
+    const contextRow = await queryAuthenticatedUserContext(client, candidate.id);
+    if (!contextRow?.is_active || contextRow.profile_role !== "client" || contextRow.role_scope !== "client") {
+      throw invalidCredentialsError;
+    }
+    await client.query(`
+      UPDATE auth.users SET encrypted_password = $1, customer_password_set_at = now(),
+        last_sign_in_at = now(), updated_at = now()
+      WHERE id = $2
+    `, [passwordHash, candidate.id]);
+    await revokeAllUserSessions(client, candidate.id);
+    const session = await createSession(candidate.id, request, client);
+    return { context: toAuthenticatedUserContext(contextRow), token: session.token };
+  });
+}
+
 function toAuthenticatedUserContext(
   row: AuthenticatedUserContextRow,
 ): AuthenticatedUserContext {
@@ -227,6 +296,7 @@ async function queryAuthenticatedUserContext(
 async function createSession(
   userId: string,
   request: Request,
+  connection: Pick<PoolClient, "query"> = pool,
 ): Promise<{
   token: string;
 }> {
@@ -234,7 +304,7 @@ async function createSession(
   const secretHash = hashSessionSecret(secret);
   const expiresAt = new Date(Date.now() + sessionTtlMilliseconds);
 
-  const result = await pool.query<{
+  const result = await connection.query<{
     id: string;
   }>(
     `
@@ -320,7 +390,9 @@ export async function authenticateUser(
   token: string;
 }> {
   const body = loginBodySchema.parse(input);
-  const user = await findUserByEmail(body.email);
+  const user = body.phone
+    ? await findCustomerByPhone(body.phone)
+    : await findUserByEmail(body.email!);
   const passwordHash =
     user?.encrypted_password ?? fallbackPasswordHash;
 
@@ -333,7 +405,8 @@ export async function authenticateUser(
     !user ||
     !passwordMatches ||
     user.deleted_at !== null ||
-    user.encrypted_password === null
+    user.encrypted_password === null ||
+    (body.phone !== undefined && !hasEstablishedPassword(user))
   ) {
     throw invalidCredentialsError;
   }
@@ -347,7 +420,8 @@ export async function authenticateUser(
   await pool.query(
     `
       UPDATE auth.users
-      SET last_sign_in_at = now()
+      SET last_sign_in_at = now(),
+          customer_password_set_at = COALESCE(customer_password_set_at, now())
       WHERE id = $1
     `,
     [user.id],
@@ -504,6 +578,11 @@ export async function changeAuthenticatedUserPassword(
   const body = changePasswordBodySchema.parse(input);
 
   return withUserTransaction(userId, async (client) => {
+    const context = await queryAuthenticatedUserContext(client, userId);
+    if (!context?.is_active) throw invalidSessionError;
+    if (context.role_scope === "client" || context.profile_role === "client") {
+      throw new AppError(403, "PASSWORD_ADMIN_REQUIRED", "Solicita el cambio de contraseña al administrador.");
+    }
     const user = await getUserPasswordById(client, userId);
 
     if (!user || user.encrypted_password === null) {

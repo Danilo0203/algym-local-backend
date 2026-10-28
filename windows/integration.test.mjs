@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtemp, writeFile, rm, cp, readFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, cp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
@@ -19,19 +19,20 @@ async function freePort() {
   return port;
 }
 
-test('fresh private cluster, 38 migrations, owner login, retry, and foreign-instance protection', {
+test('fresh private cluster, all migrations, owner login, retry, and foreign-instance protection', {
   skip: !process.env.ALGYM_INSTALLER_PG_BIN, timeout: 120000,
 }, async () => {
   const bin = process.env.ALGYM_INSTALLER_PG_BIN;
   const root = await mkdtemp(path.join(tmpdir(), 'algym-installer-test-'));
   const data = path.join(root, 'postgres');
   const migrationDir = fileURLToPath(new URL('../database/migrations/', import.meta.url));
+  const migrationCount = (await readdir(migrationDir)).filter(name => /^\d{4}_[a-z0-9_]+\.sql$/.test(name)).length;
   const request = { installationId: randomUUID(), host: '127.0.0.1', port: await freePort(),
     database: 'algym_windows', adminPassword: randomBytes(32).toString('hex'),
     appPassword: randomBytes(32).toString('hex'), syncPassword: randomBytes(32).toString('hex'),
     owner: { name: 'Propietario de prueba', email: 'owner@example.test', password: 'Test-only password 123' } };
   const executable = (name) => path.join(bin, name + (process.platform === 'win32' ? '.exe' : ''));
-  const run = (name, args) => execFileSync(executable(name), args, { encoding: 'utf8', stdio: 'pipe',
+  const run = (name, args) => execFileSync(executable(name), args, { encoding: 'utf8', stdio: process.platform === 'win32' ? 'ignore' : 'pipe',
     env: { ...process.env, PGPASSWORD: request.adminPassword } });
   let started = false;
   let api;
@@ -44,7 +45,7 @@ test('fresh private cluster, 38 migrations, owner login, retry, and foreign-inst
     run('pg_ctl', ['-D', data, '-w', '-l', path.join(root, 'postgres.log'), '-o',
       `-h 127.0.0.1 -p ${request.port} ${socket} -c cluster_name=AlGym-${request.installationId}`, 'start']);
     started = true;
-    assert.deepEqual(await bootstrap(request), { ok: true, migrations: 38 });
+    assert.deepEqual(await bootstrap(request), { ok: true, migrations: migrationCount });
     admin = new pg.Client({ host: request.host, port: request.port, user: 'postgres',
       password: request.adminPassword, database: request.database });
     await admin.connect();
@@ -125,7 +126,7 @@ test('fresh private cluster, 38 migrations, owner login, retry, and foreign-inst
     await restored.connect();
     try {
       assert.equal((await restored.query('SELECT id FROM auth.users')).rows[0].id, user.id);
-      assert.equal((await restored.query('SELECT count(*)::int AS n FROM algym_installer.migrations')).rows[0].n, 38);
+      assert.equal((await restored.query('SELECT count(*)::int AS n FROM algym_installer.migrations')).rows[0].n, migrationCount);
     } finally { await restored.end(); }
   } finally {
     if (api && api.exitCode === null) {

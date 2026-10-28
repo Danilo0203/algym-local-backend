@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { normalizeClientPhone } from "../auth/phone.js";
 import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
@@ -174,10 +175,10 @@ const forbiddenManageAccountError = new AppError(
   "No autorizado para administrar cuentas de clientes",
 );
 
-const passwordRequiresEmailError = new AppError(
+const passwordRequiresIdentifierError = new AppError(
   400,
-  "PASSWORD_REQUIRES_EMAIL",
-  "La contraseña requiere un email",
+  "PASSWORD_REQUIRES_IDENTIFIER",
+  "La contraseña requiere un correo o teléfono válido",
 );
 
 const effectiveMembershipStatusSql = `CASE WHEN overview.subscription_status = 'pending'
@@ -439,8 +440,9 @@ async function getCustomerDetailRow(
             THEN 'completed'
           ELSE 'pending'
         END AS health_profile_status,
-        users.encrypted_password IS NOT NULL AS has_password,
-        users.email IS NOT NULL
+        (users.encrypted_password IS NOT NULL AND (users.customer_password_set_at IS NOT NULL OR NULLIF(btrim(users.email), '') IS NOT NULL)) AS has_password,
+        (users.email IS NOT NULL OR private.normalize_client_phone(profiles.phone) IS NOT NULL)
+          AND (users.customer_password_set_at IS NOT NULL OR NULLIF(btrim(users.email), '') IS NOT NULL)
           AND users.encrypted_password IS NOT NULL
           AND users.deleted_at IS NULL AS login_enabled
       FROM public.customer_overview AS overview
@@ -812,6 +814,7 @@ export async function createCustomer(
             UPDATE auth.users
             SET
               encrypted_password = $1,
+              customer_password_set_at = now(),
               updated_at = now()
             WHERE id = $2
           `,
@@ -892,8 +895,8 @@ export async function updateCustomerAccount(
 
     const nextEmail = input.email ?? existingCustomer.email;
 
-    if (input.new_password !== undefined && nextEmail === null) {
-      throw passwordRequiresEmailError;
+    if (input.new_password !== undefined && !nextEmail && !normalizeClientPhone(existingCustomer.phone)) {
+      throw passwordRequiresIdentifierError;
     }
 
     const emailChanged = input.email !== undefined &&
@@ -919,6 +922,8 @@ export async function updateCustomerAccount(
                 WHEN $3::boolean THEN $4
                 ELSE encrypted_password
               END,
+              customer_password_set_at = CASE WHEN $3::boolean
+                THEN COALESCE(customer_password_set_at, now()) ELSE customer_password_set_at END,
               updated_at = now()
             WHERE id = $5
               AND deleted_at IS NULL

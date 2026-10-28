@@ -62,12 +62,11 @@ function runAdminSql(sql: string): void {
       "algym_test",
       "-v",
       "ON_ERROR_STOP=1",
-      "-c",
-      sql,
     ],
     {
       cwd: projectRoot,
-      stdio: "ignore",
+      stdio: ["pipe", "ignore", "ignore"],
+      input: Buffer.from(sql, "utf8"),
     },
   );
 }
@@ -447,11 +446,17 @@ test("GET /customers devuelve solo role client y soporta paginacion, busqueda y 
   assert.equal(pageResponse.body.meta.total, 3);
   assert.equal(pageResponse.body.meta.total_pages, 3);
   assert.equal(pageResponse.body.data.length, 1);
+  // Accented names have different ordering under Windows and C/ICU locales.
+  // Pagination must match the database's complete ordered result in either case.
+  const orderedResponse = await request(app).get("/customers")
+    .query({ search: listPrefix, sort: "full_name", page: "1", page_size: "10" })
+    .set("Cookie", cookie);
+  assert.equal(orderedResponse.status, 200);
   assert.deepEqual(
     pageResponse.body.data.map(
       (row: { full_name: string }) => row.full_name,
     ),
-    [`${listPrefix} Brenda Ruiz`],
+    [orderedResponse.body.data[1].full_name],
   );
   assertNoSensitiveFields(pageResponse.body);
 });
@@ -576,7 +581,7 @@ test("POST /customers acepta password opcional y permite login sin serializar el
   assertNoSensitiveFields(response.body);
 });
 
-test("POST /customers rechaza password débil y password sin email", { concurrency: false }, async () => {
+test("POST /customers rechaza password débil y password sin identificador válido", { concurrency: false }, async () => {
   const employee = await createSyntheticUser({ role: "employee" });
   const cookie = await loginAndGetCookie(employee.email);
 
@@ -591,7 +596,7 @@ test("POST /customers rechaza password débil y password sin email", { concurren
   const withoutEmail = await request(app)
     .post("/customers")
     .set("Cookie", cookie)
-    .send(buildCustomerPayload({ email: undefined, password: testPassword }));
+    .send(buildCustomerPayload({ email: undefined, phone: "sin teléfono", password: testPassword }));
   assert.equal(withoutEmail.status, 400);
   assert.equal(withoutEmail.body.error.code, "VALIDATION_ERROR");
   assert.ok(withoutEmail.body.error.details.password);
@@ -1457,7 +1462,7 @@ test("PATCH /customers/:id/account valida email único case-insensitive", { conc
   assert.equal(unchanged.rows[0]?.email, second.email);
 });
 
-test("PATCH /customers/:id/account establece primera contraseña y exige email", { concurrency: false }, async () => {
+test("PATCH /customers/:id/account permite contraseña sin email con teléfono registrado", { concurrency: false }, async () => {
   const admin = await createSyntheticUser({ role: "admin" });
   const cookie = await loginAndGetCookie(admin.email);
   const withoutEmail = await createCustomerDirect({ email: null });
@@ -1468,8 +1473,9 @@ test("PATCH /customers/:id/account establece primera contraseña y exige email",
     .patch(`/customers/${withoutEmail.id}/account`)
     .set("Cookie", cookie)
     .send({ new_password: newPassword });
-  assert.equal(rejected.status, 400);
-  assert.equal(rejected.body.error.code, "PASSWORD_REQUIRES_EMAIL");
+  assert.equal(rejected.status, 200);
+  assert.equal(rejected.body.account.email, null);
+  assert.equal(rejected.body.account.login_enabled, true);
 
   const response = await request(app)
     .patch(`/customers/${withoutEmail.id}/account`)

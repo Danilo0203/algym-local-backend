@@ -1,15 +1,29 @@
 import { z } from "zod";
+import { normalizeClientPhone } from "./phone.js";
+
+export const phoneSchema = z.string().trim().max(40)
+  .refine((value) => normalizeClientPhone(value) !== null, "Teléfono inválido")
+  .transform((value) => normalizeClientPhone(value)!);
 
 export const loginBodySchema = z.object({
   email: z
     .string()
     .trim()
     .toLowerCase()
-    .email(),
+    .email().optional(),
+  phone: phoneSchema.optional(),
   password: z.string().min(1).max(256),
+}).strict().refine((value) => Boolean(value.email) !== Boolean(value.phone), {
+  message: "Indica un correo o un teléfono", path: ["email"],
 });
 
 export const localPasswordSchema = z.string().min(8).max(128);
+
+export const phoneAccessBodySchema = z.object({ phone: phoneSchema }).strict();
+export const firstAccessBodySchema = z.object({
+  phone: phoneSchema,
+  password: localPasswordSchema,
+}).strict();
 
 export const changePasswordBodySchema = z
   .object({
