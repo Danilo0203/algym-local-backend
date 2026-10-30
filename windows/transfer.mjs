@@ -172,7 +172,7 @@ export async function assertTarget(client, request, data) {
 }
 
 async function assertEmpty(client, tables) {
-  const seed = new Set(['auth.users','auth.identities','public.profiles','public.roles','public.permissions','public.role_permissions','public.cash_registers']);
+  const seed = new Set(['auth.users','auth.identities','public.profiles','public.roles','public.permissions','public.role_permissions','public.cash_registers','public.enrollment_settings']);
   for (const t of tables) {
     if (!seed.has(key(t)) && (await client.query(`SELECT 1 FROM ${qualified(t)} LIMIT 1`)).rowCount)
       throw new Error('Esta instalación ya tiene datos. La importación inicial no puede reemplazar operaciones existentes.');

@@ -1045,7 +1045,7 @@ test("PATCH /customers/:id actualiza ficha basica y rechaza campos protegidos", 
   );
 });
 
-test("PATCH /customers/:id/status solo cambia profiles.is_active", { concurrency: false }, async () => {
+test("PATCH /customers/:id/status conserva los datos del cliente y la cola del reloj", { concurrency: false }, async () => {
   const employee = await createSyntheticUser({
     role: "employee",
   });
@@ -1121,6 +1121,50 @@ test("PATCH /customers/:id/status solo cambia profiles.is_active", { concurrency
     afterStatus[0]?.command_count,
   );
   assertNoSensitiveFields(response.body);
+});
+
+test("suspender cliente revoca todas sus sesiones y reactivarlo exige iniciar sesión de nuevo", { concurrency: false }, async () => {
+  const employee = await createSyntheticUser({ role: "employee" });
+  const employeeCookie = await loginAndGetCookie(employee.email);
+  const customer = await createSyntheticUser();
+  const firstSession = await loginAndGetCookie(customer.email);
+  const secondSession = await loginAndGetCookie(customer.email);
+
+  assert.equal((await request(app).get("/me/membership").set("Cookie", firstSession)).status, 200);
+
+  const suspended = await request(app)
+    .patch(`/customers/${customer.userId}/status`)
+    .set("Cookie", employeeCookie)
+    .send({ is_active: false });
+  assert.equal(suspended.status, 200);
+  assert.equal(suspended.body.is_active, false);
+
+  for (const cookie of [firstSession, secondSession]) {
+    assert.equal((await request(app).get("/auth/me").set("Cookie", cookie)).status, 401);
+    assert.equal((await request(app).get("/me/membership").set("Cookie", cookie)).status, 401);
+  }
+  assert.equal((await request(app).get("/auth/me").set("Cookie", employeeCookie)).status, 200);
+  const sessions = await pool.query<{ active: string }>(
+    `SELECT count(*) FILTER (WHERE revoked_at IS NULL)::text AS active
+     FROM auth.sessions WHERE user_id = $1`,
+    [customer.userId],
+  );
+  assert.equal(sessions.rows[0]?.active, "0");
+
+  const inactiveLogin = await request(app).post("/auth/login").send({
+    email: customer.email, password: testPassword,
+  });
+  assert.equal(inactiveLogin.status, 403);
+
+  const reactivated = await request(app)
+    .patch(`/customers/${customer.userId}/status`)
+    .set("Cookie", employeeCookie)
+    .send({ is_active: true });
+  assert.equal(reactivated.status, 200);
+  assert.equal((await request(app).get("/me/membership").set("Cookie", firstSession)).status, 401);
+
+  const newSession = await loginAndGetCookie(customer.email);
+  assert.equal((await request(app).get("/me/membership").set("Cookie", newSession)).status, 200);
 });
 
 test("GET /customers expone filtros combinados, estados, último ingreso y todos los sort permitidos", { concurrency: false }, async () => {

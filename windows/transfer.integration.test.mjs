@@ -21,7 +21,7 @@ test('portable migration validates contents, rolls back bad data, preserves ever
     owner:{name:'Prueba',email:'owner@example.test',password:'Test-only pass 123456'} };
   const data=path.join(root,'pg'), media=path.join(root,'media'); await mkdir(media);
   const run=(name,args)=>execFileSync(path.join(process.env.ALGYM_INSTALLER_PG_BIN,name+(process.platform==='win32'?'.exe':'')),args,
-    {stdio:'pipe',env:{...process.env,PGPASSWORD:request.adminPassword}});
+    {stdio:process.platform==='win32'?'ignore':'pipe',env:{...process.env,PGPASSWORD:request.adminPassword}});
   let started=false,client;
   try {
     await writeFile(path.join(root,'password'),request.adminPassword,{mode:0o600});

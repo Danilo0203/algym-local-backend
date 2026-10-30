@@ -41,7 +41,7 @@ test('incremental update preserves local rows, maps numeric collisions, dedupes 
     plans.rows.push(change(plans,plans.rows[0],{id:'2',name:'Remote plan',price:'200.00'}));
     const sub=randomUUID(),payment=randomUUID();
     append(remote,'subscriptions',{id:sub,user_id:owner,plan_id:'2',start_date:'2026-10-22',end_date:'2026-11-21',status:'active',created_at:'2026-10-22 00:00:00+00',discount_amount:'0.00',grace_days:'3'});
-    append(remote,'payments',{id:payment,subscription_id:sub,user_id:owner,amount_original:'200.00',discount_amount:'0.00',amount_paid:'200.00',method:'cash',payment_date:'2026-10-22 13:00:00+00',created_by_user_id:owner,status:'posted'});
+    append(remote,'payments',{id:payment,subscription_id:sub,user_id:owner,amount_original:'200.00',discount_amount:'0.00',amount_paid:'200.00',method:'cash',payment_date:'2026-10-22 13:00:00+00',created_by_user_id:owner,status:'posted',payment_kind:'membership',collection_id:payment});
     const attendance=table(remote,'attendance_logs');
     attendance.rows.push(change(attendance,attendance.rows[0],{id:'2',punch_time:'2026-10-22 13:00:00+00'}));
     attendance.rows.push(change(attendance,attendance.rows[0],{id:'3',punch_time:'2026-10-22 12:00:00+00'}));
@@ -112,6 +112,16 @@ test('incremental update preserves local rows, maps numeric collisions, dedupes 
     assert.equal(JSON.parse((await client.query("SELECT value FROM algym_installer.state WHERE key='merge_snapshot'")).rows[0].value).sha256,next.hash);
     await rm(path.join(media,'exercises',imageName));
     assert.deepEqual(after.tables.find(t=>t.name==='users').rows,(await exportPackage(client,media,{kind:'test'})).tables.find(t=>t.name==='users').rows);
+    // Equal amounts in one collection remain separate membership/enrollment concepts.
+    const enrolled=structuredClone(future);enrolled.source.capturedAt='2026-10-25T00:00:00Z';enrolled.createdAt=enrolled.source.capturedAt;
+    const enrollmentPayment=randomUUID();
+    append(enrolled,'payments',{id:enrollmentPayment,user_id:owner,amount_original:'200.00',discount_amount:'0.00',amount_paid:'200.00',method:'cash',payment_date:'2026-10-22 13:00:00+00',created_by_user_id:owner,status:'posted',payment_kind:'enrollment',enrollment_year:'2026',collection_id:payment});
+    append(enrolled,'customer_enrollments',{customer_id:owner,year:'2026',status:'paid',payment_id:enrollmentPayment,amount:'200.00',recorded_at:'2026-10-22 13:00:00+00',recorded_by:owner});
+    const enrollmentFile=await save(enrolled,'enrolled'), enrollmentReview=await updatePackage(request,enrollmentFile.file,media,enrollmentFile.hash,{preview:true});
+    assert.equal(enrollmentReview.canApply,true,JSON.stringify(enrollmentReview));
+    await updatePackage(request,enrollmentFile.file,media,enrollmentFile.hash,{expectedPlan:enrollmentReview.planHash});
+    assert.equal((await client.query('SELECT collection_id FROM public.payments WHERE id=$1',[enrollmentPayment])).rows[0].collection_id,payment);
+    assert.equal((await client.query('SELECT payment_id FROM public.customer_enrollments WHERE customer_id=$1 AND year=2026',[owner])).rows[0].payment_id,enrollmentPayment);
   } finally {
     await client?.end();if(started)run('pg_ctl',['-D',path.join(root,'pg'),'-m','fast','-w','stop']);
     await rm(root,{recursive:true,force:true});

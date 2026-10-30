@@ -166,6 +166,20 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
     image_url: `/api/media/exercises/${"0".repeat(64)}.png`,
   });
   assert.equal(missingMedia.status, 404);
+  assert.equal((await request(app).delete(`/exercises/${id}`).set("Cookie", client.cookie)).status, 403);
+  assert.equal((await request(app).delete(`/exercises/${id}`).set("Cookie", employee.cookie)).status, 403);
+  const removed = await request(app).delete(`/exercises/${id}`).set("Cookie", owner.cookie);
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal((await request(app).delete(`/exercises/${id}`).set("Cookie", owner.cookie)).status, 200);
+  const remaining = await request(app).get("/exercises").set("Cookie", owner.cookie);
+  assert.ok(!remaining.body.data.some((exercise: { id: number }) => exercise.id === id));
+  assert.equal(execFileSync("psql", ["-d", "algym_test", "-qAt", "-c",
+    `SELECT exercise_name_snapshot FROM public.routine_details WHERE routine_id = '${routineId}'`],
+  { encoding: "utf8" }).trim(), updatedName);
+  assert.equal((await request(app).delete("/exercises/999999999").set("Cookie", owner.cookie)).status, 404);
+  const newDetail = await request(app).post(`/customers/${client.userId}/routines/${routineId}/details`)
+    .set("Cookie", owner.cookie).send({ day_of_week: 1, exercise_id: id, exercise_name_snapshot: "No debe reinsertarse", block_type: "strength" });
+  assert.equal(newDetail.status, 404, JSON.stringify(newDetail.body));
 });
 
 test("alta y adjunto de imagen coordinan archivo y fila, incluso si falla PostgreSQL", async () => {

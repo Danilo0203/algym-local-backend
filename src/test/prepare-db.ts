@@ -482,6 +482,10 @@ for (const migrationName of [
   "0038_internal_user_biometrics.sql",
   "0039_customer_phone_access.sql",
   "0040_routine_exercise_completions.sql",
+  "0041_annual_enrollment.sql",
+  "0041_cash_devices.sql",
+  "0042_exercise_catalog_delete.sql",
+  "0043_cash_collection_group.sql",
 ]) {
   runCommand("psql", [
     ...connectionArguments, "-d", targetDatabaseName,

@@ -1,9 +1,11 @@
 import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
+import { queueAutomaticDrawer } from "../cash/cash-devices.service.js";
 import { AppError } from "../../errors/app-error.js";
 import { updateRenewedCustomerIntake } from "../customers/customers-health.service.js";
 import type { PaidMembershipInput } from "./payments.schemas.js";
+import { collectEnrollmentInTransaction } from "../enrollment/enrollment.service.js";
 
 type Authorization = { permissions: string[] | null; is_owner: boolean };
 type Customer = { id: string; role: string; is_active: boolean };
@@ -134,17 +136,18 @@ export async function createPaidMembershipInTransaction(
     [input.customerId, input.planId, startDate, endDate, discountAmount, input.graceDays],
   );
   const subscriptionId = subscription.rows[0]!.id;
-  const payment = await client.query<{ id: string }>(
+  const payment = await client.query<{ id: string; collection_id: string }>(
     `INSERT INTO public.payments
        (subscription_id, user_id, amount_original, discount_amount, amount_paid,
         method, payment_date, created_by_user_id, status)
      VALUES ($1, $2, $3::numeric, $4::numeric, $5::numeric,
              $6::public.payment_method, now(), $7, 'posted')
-     RETURNING id`,
+     RETURNING id, collection_id`,
     [subscriptionId, input.customerId, amountOriginal, discountAmount,
       amountPaid, input.paymentMethod, actorUserId],
   );
   const paymentId = payment.rows[0]!.id;
+  const collectionId = payment.rows[0]!.collection_id;
   const movement = await client.query<CashMovement>(
     `SELECT id, session_link_status
      FROM public.attach_payment_to_cash($1::uuid, $2::uuid, 'membership', NULL)`,
@@ -162,12 +165,19 @@ export async function createPaidMembershipInTransaction(
     );
   }
 
+  await queueAutomaticDrawer(client, actorUserId, attached.id, input.paymentMethod);
+  const enrollment = input.enrollment ? await collectEnrollmentInTransaction(
+    client, actorUserId, input.customerId, input.enrollment, input.paymentMethod, collectionId,
+  ) : null;
   return {
     subscription_id: subscriptionId,
     payment_id: paymentId,
     cash_movement_id: attached.id,
     session_link_status: attached.session_link_status,
     amount_paid: amountPaid,
+    enrollment,
+    collection_id: collectionId,
+    total_paid: money(amountPaid + (enrollment?.amount ?? 0)),
   };
 }
 

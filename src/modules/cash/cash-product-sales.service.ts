@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
+import { queueAutomaticDrawer } from "./cash-devices.service.js";
 import { AppError } from "../../errors/app-error.js";
 import type { CashProductSaleInput, CashProductSaleVoidInput } from "./cash.schemas.js";
 
@@ -120,7 +121,9 @@ export async function sellCashProducts(actorUserId: string, input: CashProductSa
       `SELECT public.sell_products_from_cash_session($1::jsonb, $2::text, $3::text) AS sale`,
       [JSON.stringify(items), input.paymentMethod, input.note ?? null],
     );
-    return result.rows[0]!.sale;
+    const sale = result.rows[0]!.sale;
+    await queueAutomaticDrawer(client, actorUserId, sale.cash_movement_id, input.paymentMethod);
+    return sale;
   });
 }
 

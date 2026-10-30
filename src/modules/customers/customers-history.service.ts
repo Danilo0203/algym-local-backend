@@ -378,7 +378,8 @@ export async function getCustomerHistory(
             payments.discount_amount,
             payments.amount_paid,
             payments.method::text AS method,
-            plans.name AS plan_name,
+            CASE WHEN payments.payment_kind = 'enrollment' THEN 'Inscripción ' || payments.enrollment_year
+              ELSE plans.name END AS plan_name,
             count(*) OVER()::text AS total_count
           FROM public.payments
           LEFT JOIN public.subscriptions

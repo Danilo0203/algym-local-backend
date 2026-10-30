@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { withUserTransaction } from "../../db/transaction.js";
+import { queueAutomaticDrawer } from "../cash/cash-devices.service.js";
 import { AppError } from "../../errors/app-error.js";
 import { updateRenewedCustomerIntake } from "../customers/customers-health.service.js";
 import { collectPendingMembershipSchema } from "./payments.schemas.js";
+import { collectEnrollmentInTransaction } from "../enrollment/enrollment.service.js";
 
 type CollectionInput = z.infer<typeof collectPendingMembershipSchema>;
 type PendingRow = {
@@ -94,10 +96,10 @@ export async function collectPendingMembership(actorUserId: string, membershipId
     if (amountOriginal <= 0 || amountPaid <= 0) {
       throw new AppError(400, "INVALID_PAYMENT_AMOUNT", "El importe del cobro debe ser mayor a cero");
     }
-    const payment = await client.query<{ id: string }>(
+    const payment = await client.query<{ id: string; collection_id: string }>(
       `INSERT INTO public.payments (subscription_id, user_id, amount_original,
        discount_amount, amount_paid, method, payment_date, created_by_user_id, status)
-       VALUES ($1, $2, $3, $4, $5, $6::public.payment_method, now(), $7, 'posted') RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6::public.payment_method, now(), $7, 'posted') RETURNING id, collection_id`,
       [membership.id, membership.customer_id, amountOriginal, input.discountAmount,
         amountPaid, input.paymentMethod, actorUserId],
     );
@@ -115,7 +117,13 @@ export async function collectPendingMembership(actorUserId: string, membershipId
       await updateRenewedCustomerIntake(client, membership.customer_id, input.intake, membershipId, "signup");
     }
     await client.query(`SELECT private.create_pending_routine_for_cash_payment($1::uuid)`, [paymentId]);
+    await queueAutomaticDrawer(client, actorUserId, movement.rows[0].id, input.paymentMethod);
+    const collectionId = payment.rows[0]!.collection_id;
+    const enrollment = input.enrollment ? await collectEnrollmentInTransaction(
+      client, actorUserId, membership.customer_id, input.enrollment, input.paymentMethod, collectionId,
+    ) : null;
     return { customer_id: membership.customer_id, subscription_id: membershipId,
+      enrollment, collection_id: collectionId, total_paid: Math.round((amountPaid + (enrollment?.amount ?? 0)) * 100) / 100,
       payment_id: paymentId, cash_movement_id: movement.rows[0].id,
       amount_paid: amountPaid, session_link_status: "assigned" };
   });

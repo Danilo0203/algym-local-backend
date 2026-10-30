@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 
 import { withUserTransaction } from "../../db/transaction.js";
 import { AppError } from "../../errors/app-error.js";
-import type { CreateUserInput, InternalUserRole, UpdateUserInput } from "./users.schemas.js";
+import type { CreateUserInput, InternalUserRole, UpdateUserInput, UserRoleTransitionInput } from "./users.schemas.js";
 
 type UserRow = {
   id: string;
@@ -15,6 +15,7 @@ type UserRow = {
   last_sign_in_at: Date | null;
   is_active: boolean;
   biometric_id: number | null;
+  birth_date: string | null;
 };
 
 type LockedUser = UserRow;
@@ -34,7 +35,8 @@ const userColumns = `
   COALESCE(profiles.created_at, users.created_at) AS created_at,
   users.last_sign_in_at,
   profiles.is_active,
-  profiles.biometric_id
+  profiles.biometric_id,
+  to_char(profiles.birth_date, 'YYYY-MM-DD') AS birth_date
 `;
 
 async function requirePermission(client: PoolClient, permission: string): Promise<string> {
@@ -238,6 +240,95 @@ export async function registerInternalUserBiometric(actorUserId: string, userId:
       [userId],
     );
     return { id: userId, biometric_id: result.rows[0]!.biometric_id };
+  });
+}
+
+export async function transitionUserRole(
+  actorUserId: string,
+  userId: string,
+  input: UserRoleTransitionInput,
+) {
+  return withUserTransaction(actorUserId, async (client) => {
+    const actorRole = await requirePermission(client, "users.update");
+    if (actorRole !== "owner" && actorRole !== "admin") {
+      throw new AppError(403, "FORBIDDEN", "Solo el propietario o un administrador puede cambiar entre cliente y entrenador");
+    }
+    await requirePermission(client, "customers.update");
+
+    const result = await client.query<UserRow & { has_password: boolean }>(
+      `SELECT ${userColumns},
+              (users.encrypted_password IS NOT NULL AND
+               (users.customer_password_set_at IS NOT NULL OR users.last_sign_in_at IS NOT NULL
+                OR NULLIF(btrim(users.email), '') IS NOT NULL)) AS has_password
+       FROM auth.users AS users
+       JOIN public.profiles AS profiles ON profiles.id = users.id
+       WHERE users.id = $1 AND users.deleted_at IS NULL
+       FOR UPDATE OF users, profiles`,
+      [userId],
+    );
+    const existing = result.rows[0];
+    if (!existing) throw new AppError(404, "USER_NOT_FOUND", "Usuario no encontrado");
+
+    const sourceRole = input.role === "trainer" ? "client" : "trainer";
+    if (existing.base_role !== sourceRole) {
+      throw new AppError(409, "ROLE_TRANSITION_CONFLICT", "El rol de esta cuenta cambió. Actualiza la página antes de continuar");
+    }
+    const birthDate = input.birth_date ?? existing.birth_date;
+    if (input.role === "client" && !birthDate) {
+      throw new AppError(409, "CUSTOMER_BIRTH_DATE_REQUIRED", "Indica la fecha de nacimiento para convertir al entrenador en cliente");
+    }
+    const email = input.email ?? existing.email;
+    if (input.role === "trainer" && !email?.trim()) {
+      throw new AppError(409, "TRAINER_EMAIL_REQUIRED", "Indica un correo para que el entrenador pueda iniciar sesión");
+    }
+    if (input.role === "trainer" && !input.password && !existing.has_password) {
+      throw new AppError(409, "TRAINER_PASSWORD_REQUIRED", "Establece una contraseña para que el entrenador pueda iniciar sesión");
+    }
+
+    const passwordHash = input.password ? await bcrypt.hash(input.password, 10) : null;
+    try {
+      await client.query(
+        `UPDATE auth.users
+         SET email = $2,
+             email_confirmed_at = CASE WHEN $3::boolean THEN now() ELSE email_confirmed_at END,
+             encrypted_password = COALESCE($4, encrypted_password),
+             customer_password_set_at = CASE WHEN $4::text IS NOT NULL
+               THEN COALESCE(customer_password_set_at, now()) ELSE customer_password_set_at END,
+             raw_user_meta_data = COALESCE(raw_user_meta_data, '{}'::jsonb)
+               || jsonb_build_object('role', $5::text),
+             updated_at = now()
+         WHERE id = $1`,
+        [userId, email, input.email !== undefined, passwordHash, input.role],
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") {
+        throw new AppError(409, "EMAIL_ALREADY_EXISTS", "El correo ya está registrado en otra cuenta");
+      }
+      throw error;
+    }
+    const changed = await client.query<{
+      id: string; role: "trainer" | "client"; is_active: boolean; biometric_id: number | null;
+    }>(
+      `UPDATE public.profiles
+       SET role = $2::public.user_role, panel_role_id = NULL,
+           is_active = $3, birth_date = $4::date,
+           biometric_id = CASE WHEN $2::text = 'client'
+             THEN COALESCE(biometric_id, nextval('public.profiles_biometric_id_seq'))
+             ELSE biometric_id END,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING id, role::text AS role, is_active, biometric_id`,
+      [userId, input.role, input.is_active, birthDate],
+    );
+    if (!changed.rows[0]) {
+      throw new AppError(403, "FORBIDDEN", "No autorizado para cambiar el rol de esta cuenta");
+    }
+    await client.query(
+      `UPDATE auth.sessions SET revoked_at = COALESCE(revoked_at, now())
+       WHERE user_id = $1 AND revoked_at IS NULL`,
+      [userId],
+    );
+    return changed.rows[0];
   });
 }
 

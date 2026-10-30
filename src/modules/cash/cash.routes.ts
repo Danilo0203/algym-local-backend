@@ -1,5 +1,8 @@
 import { rateLimit } from "express-rate-limit";
 import { Router } from "express";
+import { z } from "zod";
+import { getPaymentReceipt, getSaleReceipt, getSalesHistory } from "./cash-receipts.service.js";
+import { getCashDeviceOperation, getCashDeviceStatus, requestManualDrawer, requestReceipt } from "./cash-devices.service.js";
 
 import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
@@ -8,6 +11,58 @@ import { closeCashSession, ensureCashRegister, getCashDashboard, getCashHistory,
 import { searchCashProducts, sellCashProducts, voidCashProductSale } from "./cash-product-sales.service.js";
 
 export const cashRouter = Router();
+
+cashRouter.get("/sales", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const input = z.object({
+      page: z.coerce.number().int().min(1).max(100000).default(1),
+      search: z.string().trim().max(150).default(""),
+      dateFrom: z.iso.date().optional(), dateTo: z.iso.date().optional(),
+    }).parse(request.query);
+    response.json(await getSalesHistory(session.userId, input));
+  } catch (error) { next(error); }
+});
+
+cashRouter.get("/devices", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    response.json(await getCashDeviceStatus(session.userId));
+  } catch (error) { next(error); }
+});
+cashRouter.get("/devices/operations/:id", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    response.json(await getCashDeviceOperation(session.userId, z.string().uuid().parse(request.params.id)));
+  } catch (error) { next(error); }
+});
+const deviceLimiter = rateLimit({ windowMs: 60_000, limit: 15, standardHeaders: true, legacyHeaders: false });
+cashRouter.post("/devices/drawer", deviceLimiter, async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const input = z.object({ requestId: z.string().uuid(), reason: z.string().trim().min(3).max(200) }).parse(request.body);
+    response.status(202).json(await requestManualDrawer(session.userId, input.requestId, input.reason));
+  } catch (error) { next(error); }
+});
+cashRouter.get("/sales/:id/receipt", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    response.json(await getSaleReceipt(session.userId, z.string().uuid().parse(request.params.id)));
+  } catch (error) { next(error); }
+});
+cashRouter.get("/payments/:id/receipt", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    response.json(await getPaymentReceipt(session.userId, z.string().uuid().parse(request.params.id)));
+  } catch (error) { next(error); }
+});
+cashRouter.post("/sales/:id/receipt", deviceLimiter, async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const input = z.object({ requestId: z.string().uuid() }).parse(request.body);
+    response.status(202).json(await requestReceipt(session.userId, z.string().uuid().parse(request.params.id), input.requestId));
+  } catch (error) { next(error); }
+});
 
 cashRouter.get("/dashboard", async (request, response, next) => {
   try {

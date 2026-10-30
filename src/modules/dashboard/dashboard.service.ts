@@ -331,7 +331,7 @@ async function getRevenueSummary(
             AND p.payment_date < previous_period.to_ts_exclusive
         ), '0') AS previous_revenue,
         COALESCE((
-          SELECT count(*)::text
+          SELECT count(DISTINCT p.collection_id)::text
           FROM public.payments AS p
           CROSS JOIN current_period
           WHERE p.status = 'posted'

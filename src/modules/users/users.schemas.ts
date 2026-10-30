@@ -24,5 +24,21 @@ export const updateUserSchema = z.strictObject({
   message: "Indica al menos un campo para actualizar",
 });
 
+export const userRoleTransitionSchema = z.strictObject({
+  role: z.enum(["trainer", "client"]),
+  is_active: z.boolean(),
+  birth_date: z.iso.date().optional(),
+  email: z.string().trim().toLowerCase().email().max(254).optional(),
+  password: passwordSchema.optional(),
+}).superRefine((input, context) => {
+  if (input.role === "trainer" && input.birth_date !== undefined) {
+    context.addIssue({ code: "custom", path: ["birth_date"], message: "La fecha de nacimiento se completa al convertir a cliente" });
+  }
+  if (input.role === "client" && (input.email !== undefined || input.password !== undefined)) {
+    context.addIssue({ code: "custom", path: ["role"], message: "La cuenta conserva sus credenciales al convertir a cliente" });
+  }
+});
+
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
+export type UserRoleTransitionInput = z.infer<typeof userRoleTransitionSchema>;

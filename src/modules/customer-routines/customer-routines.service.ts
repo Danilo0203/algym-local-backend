@@ -414,6 +414,7 @@ function assertRoutineDateRange(
 async function resolveExerciseSnapshot(
   client: PoolClient,
   exerciseId: number | null | undefined,
+  allowInactive = false,
 ): Promise<string | null> {
   if (!exerciseId) return null;
   const result = await client.query<{
@@ -421,8 +422,8 @@ async function resolveExerciseSnapshot(
     display_name: string | null;
     display_name_es: string | null;
   }>(
-    `SELECT name, display_name, display_name_es FROM public.exercises WHERE id = $1 LIMIT 1`,
-    [exerciseId],
+    `SELECT name, display_name, display_name_es FROM public.exercises WHERE id = $1 AND (is_active OR $2) LIMIT 1`,
+    [exerciseId, allowInactive],
   );
   const exercise = result.rows[0];
   if (!exercise) {
@@ -735,9 +736,8 @@ export async function createRoutineDetail(
     const routine = await getCustomerRoutineForManager(client, customerId, routineId);
     assertEditableRoutine(routine);
 
-    const resolvedSnapshot =
-      input.exercise_name_snapshot ??
-      (await resolveExerciseSnapshot(client, input.exercise_id));
+    const catalogSnapshot = await resolveExerciseSnapshot(client, input.exercise_id);
+    const resolvedSnapshot = input.exercise_name_snapshot ?? catalogSnapshot;
     const inserted = await client.query<{ id: string | number }>(
       `
         INSERT INTO public.routine_details (
@@ -791,9 +791,9 @@ export async function updateRoutineDetail(
         ? current.exercise_name_snapshot
         : input.exercise_name_snapshot;
     if (input.exercise_id !== undefined && input.exercise_name_snapshot === undefined) {
-      exerciseNameSnapshot = await resolveExerciseSnapshot(client, exerciseId);
+      exerciseNameSnapshot = await resolveExerciseSnapshot(client, exerciseId, exerciseId === current.exercise_id);
     } else if (exerciseId) {
-      await resolveExerciseSnapshot(client, exerciseId);
+      await resolveExerciseSnapshot(client, exerciseId, exerciseId === current.exercise_id);
     }
 
     await client.query(

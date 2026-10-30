@@ -4,6 +4,7 @@ import { AppError } from "../../errors/app-error.js";
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
 import { attachExerciseImageSchema, createExerciseSchema, createExerciseWithImageSchema, decodeExerciseImage, exerciseIdSchema, updateExerciseSchema } from "./exercises.schemas.js";
 import { archiveStarterExercises, attachExerciseImage, createExercise, createExerciseWithImage, listExercises, updateExercise } from "./exercises.service.js";
+import { deleteExercise } from "./exercises.service.js";
 
 export const exercisesRouter = Router();
 
@@ -55,6 +56,13 @@ exercisesRouter.patch("/:id", async (request, response, next) => {
     const id = exerciseIdSchema.parse(request.params.id);
     const input = updateExerciseSchema.parse(request.body);
     response.status(200).json(await updateExercise(session.userId, id, input));
+  } catch (error) { next(error); }
+});
+
+exercisesRouter.delete("/:id", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    response.status(200).json(await deleteExercise(session.userId, exerciseIdSchema.parse(request.params.id)));
   } catch (error) { next(error); }
 });
 

@@ -92,6 +92,9 @@ const environmentSchema = z.object({
     .default("lax"),
 
   TRUST_PROXY: environmentBooleanSchema,
+  CASH_DRAWER_ENABLED: environmentBooleanSchema,
+  CASH_PRINTER_NAME: z.string().max(200).default(""),
+  CASH_DEVICE_DATA_DIR: z.string().default(""),
 });
 
 const parsedEnvironment =

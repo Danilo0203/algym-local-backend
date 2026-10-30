@@ -232,3 +232,14 @@ export async function archiveStarterExercises(actorUserId: string) {
     return { archived: result.rowCount ?? 0 };
   });
 }
+
+export async function deleteExercise(actorUserId: string, id: number) {
+  return withUserTransaction(actorUserId, async (client) => {
+    await requirePermission(client, "exercises.delete");
+    // Retain the row and media referenced by existing routines and their history.
+    const result = await client.query(`UPDATE public.exercises SET is_active = false
+      WHERE id = $1 RETURNING id`, [id]);
+    if (!result.rows[0]) throw new AppError(404, "EXERCISE_NOT_FOUND", "Ejercicio no encontrado");
+    return { id, deleted: true };
+  });
+}

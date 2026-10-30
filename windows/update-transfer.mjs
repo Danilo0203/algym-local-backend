@@ -40,7 +40,7 @@ function businessKeys(t, row) {
   }
   if (name(t) === 'public.payments' && r.user_id && r.payment_date) {
     const timestamp = Date.parse(r.payment_date);
-    if (Number.isFinite(timestamp)) out.push(['possible-payment', r.user_id, new Date(timestamp - 21600000).toISOString().slice(0, 10), r.amount_paid, r.method]);
+    if (Number.isFinite(timestamp)) out.push(['possible-payment', r.user_id, new Date(timestamp - 21600000).toISOString().slice(0, 10), r.amount_paid, r.method, r.payment_kind ?? 'membership', r.enrollment_year ?? null]);
   }
   if (name(t) === 'public.subscriptions') out.push(['membership', r.user_id, r.plan_id, r.start_date, r.end_date]);
   if (name(t) === 'public.plans') out.push(['plan', normalized(r.name), r.duration_days, r.price]);
@@ -103,7 +103,10 @@ export function planUpdate({base, incoming, local, metadata, mappings = {}}) {
     const old = indexRows(t, oldTables.get(name(t)).rows.map(r => transform(t, r)));
     for (const row of liveTables.get(name(t)).rows) if (!equal(t, old.get(keyOf(t, row)), row)) {
       locallyChanged.add(name(t)+':'+keyOf(t,row));
-      for (const fk of t.foreignKeys) locallyChangedParents.add(fk.table + ':' + JSON.stringify(fk.columns.map(c => row[t.columns.indexOf(c)])));
+      for (const fk of t.foreignKeys) {
+        const values = fk.columns.map(c => row[t.columns.indexOf(c)]);
+        if (values.every(value => value !== null)) locallyChangedParents.add(fk.table + ':' + JSON.stringify(values));
+      }
     }
   }
   for (const t of metadata) {
@@ -136,7 +139,9 @@ export function planUpdate({base, incoming, local, metadata, mappings = {}}) {
         if (historical.has(name(t)+':'+key)) { conflict(t, 'changed_after_local_deletion'); continue; }
         const sharedFinancialActivity = t.foreignKeys.some(fk => {
           if (!['public.products','public.cash_sessions','public.subscriptions'].includes(fk.table)) return false;
-          const parent = fk.table+':'+JSON.stringify(fk.columns.map(c=>remote[t.columns.indexOf(c)]));
+          const values = fk.columns.map(c=>remote[t.columns.indexOf(c)]);
+          if (values.some(value => value === null)) return false;
+          const parent = fk.table+':'+JSON.stringify(values);
           return locallyChanged.has(parent) || locallyChangedParents.has(parent);
         });
         if (sharedFinancialActivity) { conflict(t, 'local_related_activity'); continue; }

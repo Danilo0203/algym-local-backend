@@ -1055,6 +1055,15 @@ export async function updateCustomerStatus(
       throw customerNotFoundError;
     }
 
+    if (!input.is_active) {
+      await client.query(
+        `UPDATE auth.sessions
+         SET revoked_at = COALESCE(revoked_at, now())
+         WHERE user_id = $1 AND revoked_at IS NULL`,
+        [customerId],
+      );
+    }
+
     const customer = await getCustomerDetailRow(client, customerId);
 
     if (!customer) {

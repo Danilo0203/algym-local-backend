@@ -63,12 +63,11 @@ function runAdminSql(sql: string): void {
       "algym_test",
       "-v",
       "ON_ERROR_STOP=1",
-      "-c",
-      sql,
     ],
     {
       cwd: projectRoot,
-      stdio: "ignore",
+      input: Buffer.from(sql, "utf8"),
+      stdio: ["pipe", "ignore", "pipe"],
     },
   );
 }

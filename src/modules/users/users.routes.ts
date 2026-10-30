@@ -1,13 +1,14 @@
 import { Router } from "express";
 
 import { readSessionTokenFromRequest, validateSessionToken } from "../auth/auth.service.js";
-import { createUserSchema, updateUserSchema, userIdParamSchema } from "./users.schemas.js";
+import { createUserSchema, updateUserSchema, userIdParamSchema, userRoleTransitionSchema } from "./users.schemas.js";
 import {
   createInternalUser,
   deleteInternalUser,
   listInternalRoles,
   listInternalUsers,
   registerInternalUserBiometric,
+  transitionUserRole,
   updateInternalUser,
 } from "./users.service.js";
 
@@ -49,6 +50,15 @@ usersRouter.post("/:id/biometric", async (request, response, next) => {
     const session = await validateSessionToken(readSessionTokenFromRequest(request));
     const userId = userIdParamSchema.parse(request.params.id);
     response.status(200).json(await registerInternalUserBiometric(session.userId, userId));
+  } catch (error) { next(error); }
+});
+
+usersRouter.post("/:id/role-transition", async (request, response, next) => {
+  try {
+    const session = await validateSessionToken(readSessionTokenFromRequest(request));
+    const userId = userIdParamSchema.parse(request.params.id);
+    const input = userRoleTransitionSchema.parse(request.body);
+    response.status(200).json(await transitionUserRole(session.userId, userId, input));
   } catch (error) { next(error); }
 });
 

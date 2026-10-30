@@ -15,6 +15,7 @@ type SessionRow = {
   difference_amount: string | null; status: string; notes: string | null;
 };
 type MovementRow = {
+  collection_id: string | null;
   id: string; cash_session_id: string | null; movement_type: string; category: string;
   payment_method: "cash" | "card" | "transfer" | null;
   amount: string; cash_effect_amount: string; session_link_status: string; origin: string;
@@ -54,6 +55,7 @@ const sessionColumns = `
   s.counted_amount, s.difference_amount, s.status, s.notes`;
 
 const movementColumns = `
+  payment.collection_id,
   m.id, m.cash_session_id, m.movement_type, m.category, m.payment_method,
   m.amount, m.cash_effect_amount, m.session_link_status, m.origin,
   m.source_payment_id, m.source_subscription_id, m.source_product_sale_id,
@@ -109,11 +111,13 @@ function summarize(movements: MovementView[], openingAmount: number) {
     totalsByMethod: { cash: 0, card: 0, transfer: 0 },
     refunds: 0, adjustments: 0, voids: 0, salesCount: 0,
   };
+  const collections = new Set<string>();
   for (const movement of movements) {
     if (movement.voided_at) continue;
     summary.expectedAmount += movement.cash_effect_amount;
     if (movement.movement_type === "sale") {
-      summary.salesCount += 1;
+      collections.add(movement.collection_id ?? movement.id);
+      summary.salesCount = collections.size;
       if (movement.payment_method) summary.totalsByMethod[movement.payment_method] += movement.amount;
     } else if (movement.movement_type === "refund") {
       summary.refunds += movement.amount;

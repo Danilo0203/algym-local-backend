@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { customerRenewalIntakeSchema } from "../customers/customer-intake.schemas.js";
+import { enrollmentQuoteSchema } from "../enrollment/enrollment.schemas.js";
 
 const sortColumns = "(?:payment_date|user_name|subscription_status|plan_name|method|amount_paid|status)";
 
@@ -25,6 +26,7 @@ const money = z.number().finite().nonnegative().max(99_999_999.99)
     "El importe admite dos decimales");
 
 const paidMembershipFieldsSchema = z.object({
+  enrollment: enrollmentQuoteSchema.optional(),
   customerId: z.string().uuid(),
   planId: z.number().int().positive(),
   operation: z.enum(["create", "renew"]),
@@ -61,6 +63,7 @@ export const pendingMembershipQuerySchema = z.object({
 }).strict();
 
 export const collectPendingMembershipSchema = z.object({
+  enrollment: enrollmentQuoteSchema.optional(),
   discountAmount: money.default(0),
   paymentMethod: z.enum(["cash", "card", "transfer"]).default("cash"),
   intake: customerRenewalIntakeSchema.optional(),

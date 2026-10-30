@@ -22,8 +22,8 @@ const customPlanName = "ZZTEST PAID MEMBERSHIP CUSTOM PLAN";
 const customRoleIds: string[] = [];
 
 function adminSql(sql: string): string {
-  return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql], {
-    cwd: root, encoding: "utf8",
+  return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt"], {
+    cwd: root, encoding: "utf8", input: Buffer.from(sql, "utf8"),
   }).trim();
 }
 

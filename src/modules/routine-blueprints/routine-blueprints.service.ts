@@ -183,6 +183,10 @@ async function insertBlueprintDetails(client: PoolClient, blueprintId: string, i
     const day = input.days[dayIndex]!;
     for (let exerciseIndex = 0; exerciseIndex < day.exercises.length; exerciseIndex++) {
       const exercise = day.exercises[exerciseIndex]!;
+      if (exercise.exercise_id) {
+        const available = await client.query(`SELECT id FROM public.exercises WHERE id = $1 AND is_active`, [exercise.exercise_id]);
+        if (!available.rowCount) throw new AppError(409, "EXERCISE_UNAVAILABLE", "El ejercicio fue eliminado del catálogo; selecciona otro");
+      }
       await client.query(`
         INSERT INTO public.routine_blueprint_details
           (blueprint_id, day_of_week, exercise_id, exercise_order,
@@ -293,6 +297,10 @@ export async function assignBlueprint(actorUserId: string, id: string, customerI
     await requireAccess(client, "manage");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [customerId]);
     const source = await findBlueprint(client, id, true);
+    const unavailable = await client.query(`SELECT d.id FROM public.routine_blueprint_details d
+      JOIN public.exercises e ON e.id = d.exercise_id
+      WHERE d.blueprint_id = $1 AND NOT e.is_active LIMIT 1`, [id]);
+    if (unavailable.rowCount) throw new AppError(409, "EXERCISE_UNAVAILABLE", "La plantilla contiene ejercicios eliminados. Reemplázalos antes de asignarla.");
     const customer = await client.query(`
       SELECT id FROM public.profiles WHERE id = $1 AND role = 'client' AND is_active = true
     `, [customerId]);

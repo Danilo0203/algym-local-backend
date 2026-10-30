@@ -30,6 +30,7 @@ import { routineBlueprintsRouter } from "./modules/routine-blueprints/routine-bl
 import { rolesRouter } from "./modules/roles/roles.routes.js";
 import { usersRouter } from "./modules/users/users.routes.js";
 import { migrationRouter } from "./modules/migration/migration.routes.js";
+import { enrollmentRouter } from "./modules/enrollment/enrollment.routes.js";
 
 export const app = express();
 
@@ -89,6 +90,7 @@ app.use("/media", mediaRouter);
 app.use("/messages", messagesRouter);
 app.use("/me", meRouter);
 app.use("/payments", paymentsRouter);
+app.use("/enrollment", enrollmentRouter);
 app.use("/plans", plansRouter);
 app.use("/profile", profileRouter);
 app.use("/routine-blueprints", routineBlueprintsRouter);

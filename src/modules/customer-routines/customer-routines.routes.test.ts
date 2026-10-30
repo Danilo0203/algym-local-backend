@@ -33,16 +33,16 @@ function sqlLiteral(value: string): string {
 function runAdminSql(sql: string): void {
   execFileSync(
     "psql",
-    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-c", sql],
-    { cwd: projectRoot, stdio: "ignore" },
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1"],
+    { cwd: projectRoot, input: Buffer.from(sql, "utf8"), stdio: ["pipe", "ignore", "pipe"] },
   );
 }
 
 function runAdminQuery(sql: string): string {
   return execFileSync(
     "psql",
-    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql],
-    { cwd: projectRoot, encoding: "utf8" },
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt"],
+    { cwd: projectRoot, encoding: "utf8", input: Buffer.from(sql, "utf8") },
   ).trim();
 }
 
