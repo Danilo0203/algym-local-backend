@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/pool.js";
 import { withUserTransaction } from "../../db/transaction.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const testEmailDomain = "@rbac-hardening.test.local";
 const testNamePrefix = "ZZTEST RBAC HARDENING";
@@ -50,43 +51,18 @@ type PermissionFixture = {
 const activePermissionFixtures = new Set<PermissionFixture>();
 
 function runAdminSql(sql: string): void {
-  execFileSync(
-    "psql",
-    [
-      "-X",
-      "-d",
-      "algym_test",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-c",
-      sql,
-    ],
-    {
-      cwd: projectRoot,
-      stdio: "ignore",
-    },
+  runPsqlSql(
+    ["-X", "-d", "algym_test", "-v", "ON_ERROR_STOP=1"],
+    sql,
+    { cwd: projectRoot, output: "ignore" },
   );
 }
 
 function runAdminQuery(sql: string): string {
-  return execFileSync(
-    "psql",
-    [
-      "-X",
-      "-d",
-      "algym_test",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-qAt",
-      "-F",
-      "|",
-      "-c",
-      sql,
-    ],
-    {
-      cwd: projectRoot,
-      encoding: "utf8",
-    },
+  return runPsqlSql(
+    ["-X", "-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-F", "|"],
+    sql,
+    { cwd: projectRoot, output: "capture" },
   ).trim();
 }
 

@@ -5,6 +5,7 @@ import test, { after, before, beforeEach } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { env } from "../../config/env.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const sourceDatabaseName = "algym_test";
 const targetDatabaseName = "algym_0005_sequence_test";
@@ -37,27 +38,18 @@ function runDatabaseCommand(command: "createdb" | "dropdb", args: string[]): voi
 }
 
 function runAdminSql(sql: string): void {
-  execFileSync(
-    "psql",
-    ["-X", "-d", targetDatabaseName, "-v", "ON_ERROR_STOP=1", "-c", sql],
-    { cwd: projectRoot, stdio: "ignore" },
+  runPsqlSql(
+    ["-X", "-d", targetDatabaseName, "-v", "ON_ERROR_STOP=1"],
+    sql,
+    { cwd: projectRoot, output: "ignore" },
   );
 }
 
 function runAdminQuery(sql: string): string {
-  return execFileSync(
-    "psql",
-    [
-      "-X",
-      "-d",
-      targetDatabaseName,
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-qAt",
-      "-c",
-      sql,
-    ],
-    { cwd: projectRoot, encoding: "utf8" },
+  return runPsqlSql(
+    ["-X", "-d", targetDatabaseName, "-v", "ON_ERROR_STOP=1", "-qAt"],
+    sql,
+    { cwd: projectRoot, output: "capture" },
   ).trim();
 }
 

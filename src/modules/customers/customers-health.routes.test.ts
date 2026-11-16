@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import test, { after, before } from "node:test";
 
@@ -9,6 +8,7 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/pool.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const testEmailDomain = "@customers-health.test.local";
 const testNamePrefix = "ZZTEST_CUSTOMERS_HEALTH";
@@ -35,10 +35,10 @@ function sqlUuidList(values: Iterable<string>): string {
 }
 
 function runAdminSql(sql: string): void {
-  execFileSync(
-    "psql",
-    ["-X", "-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-c", sql],
-    { stdio: "ignore" },
+  runPsqlSql(
+    ["-X", "-d", "algym_test", "-v", "ON_ERROR_STOP=1"],
+    sql,
+    { output: "ignore" },
   );
 }
 

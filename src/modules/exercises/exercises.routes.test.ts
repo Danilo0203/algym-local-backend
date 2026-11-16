@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +12,7 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
 import { saveMedia } from "../media/media.service.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const testEmailDomain = "@exercises.test.local";
@@ -22,10 +22,11 @@ const mediaRoot = mkdtempSync(path.join(tmpdir(), "algym-exercises-test-"));
 process.env.LOCAL_MEDIA_ROOT = mediaRoot;
 
 function adminSql(sql: string) {
-  execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-c", sql], {
-    cwd: projectRoot,
-    stdio: "ignore",
-  });
+  runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1"],
+    sql,
+    { cwd: projectRoot, output: "ignore" },
+  );
 }
 
 async function createUser(role: "owner" | "client" | "employee") {
@@ -152,10 +153,10 @@ test("catálogo de ejercicios crea y edita datos e imagen sin servicio externo",
   assert.equal(updated.body.name, updatedName);
   assert.equal(updated.body.slug, `${updatedName.toLowerCase().replaceAll(" ", "-")}${created.body.slug.slice(-9)}`);
   assert.equal(updated.body.is_favorite, true);
-  const snapshot = execFileSync(
-    "psql",
-    ["-d", "algym_test", "-qAt", "-c", `SELECT exercise_name_snapshot FROM public.routine_details WHERE routine_id = '${routineId}'`],
-    { cwd: projectRoot, encoding: "utf8" },
+  const snapshot = runPsqlSql(
+    ["-d", "algym_test", "-qAt"],
+    `SELECT exercise_name_snapshot FROM public.routine_details WHERE routine_id = '${routineId}'`,
+    { cwd: projectRoot, output: "capture" },
   ).trim();
   assert.equal(snapshot, updatedName);
 

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import test, {
@@ -16,6 +15,7 @@ import { app } from "../../app.js";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/pool.js";
 import type { DashboardOverviewResponse } from "./dashboard.types.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const testEmailDomain = "@dashboard.test.local";
 const testPassword = "PasswordDePrueba123";
@@ -56,20 +56,10 @@ function toSqlLiteral(
 }
 
 function runAdminSql(sql: string): void {
-  execFileSync(
-    "psql",
-    [
-      "-d",
-      "algym_test",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-c",
-      sql,
-    ],
-    {
-      cwd: projectRoot,
-      stdio: "ignore",
-    },
+  runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1"],
+    sql,
+    { cwd: projectRoot, output: "ignore" },
   );
 }
 
