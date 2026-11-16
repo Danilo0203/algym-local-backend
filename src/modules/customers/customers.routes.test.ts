@@ -1355,6 +1355,8 @@ test("RBAC de Clientes permite lectura y cuenta a admin sin ampliar otros roles"
     "customer_health_profiles.view",
     "customers.manage_account",
     "customers.view",
+    "enrollment.manage",
+    "exercises.delete",
     "payments.view",
     "plans.create",
     "plans.delete",

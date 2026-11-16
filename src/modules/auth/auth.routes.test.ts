@@ -224,6 +224,8 @@ test("POST /auth/login devuelve authorization y rechaza datos sensibles", async 
       "customer_health_profiles.view",
       "customers.manage_account",
       "customers.view",
+      "enrollment.manage",
+      "exercises.delete",
       "payments.view",
       "plans.create",
       "plans.delete",
@@ -292,6 +294,8 @@ test("POST /auth/login marca owner y usa scope panel para roles internos", async
     scope: "panel",
     permissions: [
       "dashboard.view",
+      "enrollment.manage",
+      "exercises.delete",
       "roles.view",
       "users.view",
     ],
