@@ -42,7 +42,7 @@ for (const origin of ['inscripcion', 'caja']) {
       const before=(await db.query('SELECT name,sha256 FROM algym_installer.migrations ORDER BY name')).rows;
       if(origin==='caja') await db.query("INSERT INTO cash_device_operations(actor_user_id,kind,status,reason) VALUES($1,'drawer_manual','sent','Historial previo')",[owner]);
       else await db.query('UPDATE enrollment_settings SET fee=60 WHERE singleton');
-      const upgraded=await bootstrap({...request,owner:null});assert.equal(upgraded.migrations,44);
+      const upgraded=await bootstrap({...request,owner:null});assert.equal(upgraded.migrations,45);
       const after=(await db.query('SELECT name,sha256 FROM algym_installer.migrations ORDER BY name')).rows;
       for(const old of before) assert.deepEqual(after.find(row=>row.name===old.name),old);
       const preserved=(await db.query('SELECT * FROM payments WHERE id=$1',[payment.id])).rows[0];
@@ -50,7 +50,7 @@ for (const origin of ['inscripcion', 'caja']) {
       assert.equal((await db.query('SELECT count(*)::int n FROM auth.users')).rows[0].n,1);
       if(origin==='caja') assert.equal((await db.query("SELECT count(*)::int n FROM cash_device_operations WHERE reason='Historial previo'")).rows[0].n,1);
       else assert.equal(Number((await db.query('SELECT fee FROM enrollment_settings')).rows[0].fee),60);
-      assert.equal((await bootstrap({...request,owner:null})).migrations,44);
+      assert.equal((await bootstrap({...request,owner:null})).migrations,45);
     } finally {
       await db?.end();if(started)run('pg_ctl',['-D',path.join(root,'pg'),'-m','fast','-w','stop']);
       const resolved=path.resolve(root);assert.ok(resolved.startsWith(path.resolve(tmpdir())+path.sep)&&path.basename(resolved).startsWith('algym-unified-test-'));
