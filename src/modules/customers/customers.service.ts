@@ -1073,3 +1073,47 @@ export async function updateCustomerStatus(
     return mapCustomerDetail(customer, authorization);
   });
 }
+
+export interface DeletedCustomer {
+  id: string;
+  full_name: string;
+  biometric_id: number | null;
+}
+
+function postgresErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
+
+/**
+ * Permanently deletes a customer. Payments and cash movements are kept,
+ * unlinked and labelled with the customer's name (see migration 0044).
+ * Returns the biometric ID so the caller can remove the user from the clock.
+ */
+export async function deleteCustomerPermanently(
+  actorUserId: string,
+  customerId: string,
+): Promise<DeletedCustomer> {
+  try {
+    return await withUserTransaction(actorUserId, async (client) => {
+      const result = await client.query<{ full_name: string; biometric_id: number | null }>(
+        "SELECT full_name, biometric_id FROM private.delete_customer_permanently($1::uuid)",
+        [customerId],
+      );
+      const row = result.rows[0]!;
+      return { id: customerId, full_name: row.full_name, biometric_id: row.biometric_id };
+    });
+  } catch (error) {
+    switch (postgresErrorCode(error)) {
+      case "42501":
+        throw new AppError(403, "FORBIDDEN", "No autorizado para eliminar clientes");
+      case "P0002":
+        throw customerNotFoundError;
+      case "22023":
+        throw new AppError(409, "NOT_A_CUSTOMER", "Solo se pueden eliminar clientes");
+      default:
+        throw error;
+    }
+  }
+}

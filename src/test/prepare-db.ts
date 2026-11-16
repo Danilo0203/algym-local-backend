@@ -489,6 +489,7 @@ for (const migrationName of [
   "0041_cash_devices.sql",
   "0042_exercise_catalog_delete.sql",
   "0043_cash_collection_group.sql",
+  "0044_customer_permanent_delete.sql",
 ]) {
   runCommand("psql", [
     ...connectionArguments, "-d", targetDatabaseName,

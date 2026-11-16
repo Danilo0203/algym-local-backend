@@ -20,6 +20,7 @@ import { getCustomerHistory } from "./customers-history.service.js";
 import { customerIdParamSchema } from "./customers.schemas.js";
 import {
   createCustomer,
+  deleteCustomerPermanently,
   getCustomerById,
   listCustomers,
   listCustomerSidebar,
@@ -301,6 +302,27 @@ customersRouter.patch(
       );
 
       response.status(200).json(customer);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+customersRouter.delete(
+  "/:id",
+  async (request, response, next) => {
+    try {
+      const token = readSessionTokenFromRequest(request);
+      const session = await validateSessionToken(token);
+      const customerId = customerIdParamSchema.parse(
+        request.params.id,
+      );
+      const deleted = await deleteCustomerPermanently(
+        session.userId,
+        customerId,
+      );
+
+      response.status(200).json(deleted);
     } catch (error) {
       next(error);
     }

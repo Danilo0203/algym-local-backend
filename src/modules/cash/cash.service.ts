@@ -64,7 +64,7 @@ const movementColumns = `
   (SELECT string_agg(item.product_name || ' x' || item.quantity::text, ', ' ORDER BY item.created_at)
      FROM public.product_sale_items AS item
     WHERE item.product_sale_id = sale.id) AS product_sale_items_summary,
-  m.customer_id, customer.full_name AS customer_name,
+  m.customer_id, COALESCE(customer.full_name, m.deleted_customer_name) AS customer_name,
   m.created_by_user_id, creator.full_name AS created_by_name,
   m.note, m.created_at, m.voided_at, payment.status::text AS source_payment_status`;
 

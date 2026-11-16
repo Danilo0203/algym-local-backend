@@ -19,9 +19,9 @@ const saleRows = `SELECT m.id, m.created_at, m.amount, m.payment_method, m.note,
     m.source_product_sale_id, m.source_payment_id,
     COALESCE(sale.sale_number, 'P-' || m.source_payment_id::text, m.id::text) AS reference,
     COALESCE(sale.status, pay.status::text, CASE WHEN m.voided_at IS NULL THEN 'posted' ELSE 'voided' END) AS status,
-    COALESCE(customer.full_name, 'Público general') AS customer,
+    COALESCE(customer.full_name, m.deleted_customer_name, 'Público general') AS customer,
     COALESCE(cashier.full_name, 'Usuario') AS cashier,
-    pay.amount_original, pay.discount_amount, plan.name AS plan_name,
+    pay.amount_original, pay.discount_amount, COALESCE(plan.name, pay.deleted_plan_name) AS plan_name,
     CASE WHEN pay.status = 'posted' AND m.voided_at IS NULL
       THEN 'collection:' || pay.collection_id::text || ':' || m.payment_method::text
       ELSE 'movement:' || m.id::text END AS group_key,

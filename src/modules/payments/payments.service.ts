@@ -28,9 +28,11 @@ const sortableColumns = new Set([
 
 const paymentRowsSql = `WITH payment_rows AS (
   SELECT payment.id, payment.subscription_id, payment.payment_date, payment.amount_paid, payment.method,
-         payment.status, payment.user_id, customer.full_name AS user_name,
+         payment.status, payment.user_id,
+         COALESCE(customer.full_name, payment.deleted_customer_name) AS user_name,
          customer.avatar_url, CASE WHEN payment.payment_kind = 'enrollment'
-           THEN 'Inscripción ' || payment.enrollment_year ELSE plan.name END AS plan_name,
+           THEN 'Inscripción ' || payment.enrollment_year
+           ELSE COALESCE(plan.name, payment.deleted_plan_name) END AS plan_name,
          CASE WHEN subscription.status = 'active'::public.sub_status
                    AND public.subscription_access_until(subscription.end_date, subscription.grace_days) < CURRENT_DATE
               THEN 'expired'::public.sub_status ELSE subscription.status END AS subscription_status,
@@ -131,9 +133,11 @@ export async function getPaymentDetail(actorUserId: string, paymentId: string) {
               payment.amount_paid::text AS amount_paid, payment.method, payment.status,
               payment.notes, payment.created_by_user_id, payment.reversed_at,
               payment.reversed_by_user_id, payment.replacement_payment_id,
-              payment.reversal_reason, customer.full_name AS user_name,
+              payment.reversal_reason,
+              COALESCE(customer.full_name, payment.deleted_customer_name) AS user_name,
               CASE WHEN payment.payment_kind = 'enrollment' THEN 'Inscripción ' || payment.enrollment_year
-                ELSE plan.name END AS plan_name, subscription.status::text AS subscription_status,
+                ELSE COALESCE(plan.name, payment.deleted_plan_name) END AS plan_name,
+              subscription.status::text AS subscription_status,
               subscription.start_date::text AS subscription_start_date,
               subscription.end_date::text AS subscription_end_date,
               COALESCE(payment.payment_kind, (SELECT movement.category FROM public.cash_movements AS movement
