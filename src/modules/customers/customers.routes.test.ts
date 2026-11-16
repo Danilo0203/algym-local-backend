@@ -15,6 +15,7 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/pool.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const currentDirectory = path.dirname(
   fileURLToPath(import.meta.url),
@@ -1997,16 +1998,9 @@ test("0008 asigna una sola relación admin/customers.view y es idempotente", { c
     );
   }
 
-  const relationCount = execFileSync(
-    "psql",
-    [
-      "-d",
-      "algym_test",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-qAt",
-      "-c",
-      `
+  const relationCount = runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt"],
+    `
         SELECT count(*)
         FROM public.role_permissions
         INNER JOIN public.roles
@@ -2016,8 +2010,7 @@ test("0008 asigna una sola relación admin/customers.view y es idempotente", { c
         WHERE roles.slug = 'admin'
           AND permissions.key = 'customers.view';
       `,
-    ],
-    { cwd: projectRoot, encoding: "utf8" },
+    { cwd: projectRoot, output: "capture" },
   ).trim();
 
   assert.equal(relationCount, "1");

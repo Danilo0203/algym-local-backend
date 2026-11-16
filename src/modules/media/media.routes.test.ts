@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +12,7 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
 import { saveMedia } from "./media.service.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const testEmailDomain = "@media.test.local";
@@ -22,17 +22,19 @@ const mediaRoot = mkdtempSync(path.join(tmpdir(), "algym-media-test-"));
 process.env.LOCAL_MEDIA_ROOT = mediaRoot;
 
 function adminSql(sql: string) {
-  execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-c", sql], {
-    cwd: projectRoot,
-    stdio: "ignore",
-  });
+  runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1"],
+    sql,
+    { cwd: projectRoot, output: "ignore" },
+  );
 }
 
 function adminValue(sql: string) {
-  return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A", "-c", sql], {
-    cwd: projectRoot,
-    encoding: "utf8",
-  }).trim();
+  return runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"],
+    sql,
+    { cwd: projectRoot, output: "capture" },
+  ).trim();
 }
 
 async function createUser(role: "owner" | "admin" | "employee" | "client") {

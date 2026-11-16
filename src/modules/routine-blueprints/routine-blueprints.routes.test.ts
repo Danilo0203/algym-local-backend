@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -12,15 +11,18 @@ import { app } from "../../app.js";
 import { env } from "../../config/env.js";
 import { pool } from "../../db/pool.js";
 import { withUserTransaction } from "../../db/transaction.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const testEmailDomain = "@routine-blueprints.test.local";
 const password = "PasswordDePrueba123";
 
 function adminSql(sql: string): string {
-  return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql], {
-    cwd: projectRoot, encoding: "utf8",
-  }).trim();
+  return runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt"],
+    sql,
+    { cwd: projectRoot, output: "capture" },
+  ).trim();
 }
 
 async function createUser(role: "owner" | "client" | "employee") {

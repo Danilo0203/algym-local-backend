@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -11,16 +10,18 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
 import { withUserTransaction } from "../../db/transaction.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const testDomain = "@messages.test.local";
 const password = "PasswordDePrueba123";
 
 function adminSql(sql: string): void {
-  execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-c", sql], {
-    cwd: projectRoot,
-    stdio: "ignore",
-  });
+  runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1"],
+    sql,
+    { cwd: projectRoot, output: "ignore" },
+  );
 }
 
 async function createUser(role: "owner" | "client") {

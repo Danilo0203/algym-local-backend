@@ -36,6 +36,9 @@ for (const inheritedHost of [process.env.PGHOST, process.env.PGHOSTADDR]) {
 const environment: NodeJS.ProcessEnv = {
   ...process.env,
   ...(dbPassword ? { PGPASSWORD: dbPassword } : {}),
+  // Migration files are UTF-8. With inherited console stdio, psql on Windows
+  // would otherwise pick the console code page and store accents garbled.
+  PGCLIENTENCODING: "UTF8",
 };
 delete environment.PGHOST;
 delete environment.PGHOSTADDR;

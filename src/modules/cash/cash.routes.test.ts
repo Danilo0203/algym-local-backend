@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import test, { after, before } from "node:test";
@@ -11,6 +10,7 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
 import { withUserTransaction } from "../../db/transaction.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const password = "CashTestPassword123";
@@ -18,9 +18,11 @@ const domain = "@cash.test.local";
 const insertedGrantPairs: string[] = [];
 
 function adminSql(sql: string): string {
-  return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql], {
-    cwd: root, encoding: "utf8",
-  }).trim();
+  return runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt"],
+    sql,
+    { cwd: root, output: "capture" },
+  ).trim();
 }
 
 async function createUser(role: "client" | "employee" | "admin" | "owner") {

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import test, { after, before } from "node:test";
@@ -11,6 +10,7 @@ import request from "supertest";
 import { app } from "../../app.js";
 import { pool } from "../../db/pool.js";
 import { withUserTransaction } from "../../db/transaction.js";
+import { runPsqlSql } from "../../test/psql.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const domain = "@paid-membership.test.local";
@@ -22,9 +22,11 @@ const customPlanName = "ZZTEST PAID MEMBERSHIP CUSTOM PLAN";
 const customRoleIds: string[] = [];
 
 function adminSql(sql: string): string {
-  return execFileSync("psql", ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt"], {
-    cwd: root, encoding: "utf8", input: Buffer.from(sql, "utf8"),
-  }).trim();
+  return runPsqlSql(
+    ["-d", "algym_test", "-v", "ON_ERROR_STOP=1", "-qAt"],
+    sql,
+    { cwd: root, output: "capture" },
+  ).trim();
 }
 
 async function createUser(role: "owner" | "admin" | "employee" | "client" | "custom", panelRoleId?: string) {
@@ -332,8 +334,11 @@ test("cobro local exige autorización y guarda membresía, pago y caja juntos", 
   assert.equal(renewal.status, 201, JSON.stringify(renewal.body));
   assert.equal(adminSql(`SELECT status::text FROM public.subscriptions
     WHERE id = '${created.body.subscription_id}'`), "expired");
+  // Renewal starts the day after the previous end date, or today if that already passed.
+  const expectedRenewalStart = adminSql(`SELECT GREATEST(DATE '2026-11-01',
+    (now() AT TIME ZONE 'America/Guatemala')::date)::text`);
   assert.equal(adminSql(`SELECT start_date::text FROM public.subscriptions
-    WHERE id = '${renewal.body.subscription_id}'`), "2026-11-01");
+    WHERE id = '${renewal.body.subscription_id}'`), expectedRenewalStart);
   assert.equal(adminSql(`SELECT cash_effect_amount::text FROM public.cash_movements
     WHERE id = '${renewal.body.cash_movement_id}'`), "0.00");
   const afterRenewal = await request(app).get("/cash/dashboard").set("Cookie", employee.cookie);
